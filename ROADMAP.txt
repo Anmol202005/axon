@@ -1,0 +1,93 @@
+axon — feature roadmap
+======================
+
+This doc is a checklist of features. Section 1 closes the gap with current
+market leaders (Claude Code, Cursor, Aider, Codex CLI, Cline, Continue).
+Section 2 is where our orchestration-based model — where tasks are divided
+across sub-agents for better context usage — lets us leapfrog them.
+
+One line per feature. Order is rough priority.
+
+
+==============================================================================
+SECTION 1 — PARITY: match the current market
+==============================================================================
+
+[ ] Streaming token output rendered live in the TUI as the model speaks.
+[ ] Multi-line input with shift+enter newline and bracketed-paste support.
+[ ] Markdown rendering with syntax-highlighted code blocks in replies.
+[ ] Diff preview with apply / reject / edit before any file write lands.
+[ ] Per-tool approval flow: allow once / always allow / deny.
+[ ] Project memory file (AXON.md) auto-loaded into every session.
+[ ] File @-mentions to inject files, ranges, or selections as context.
+[ ] Image / screenshot paste and drag-drop for multimodal prompts.
+[ ] Conversation persistence and resume by session id.
+[ ] Session transcript export to markdown or JSON.
+[ ] ripgrep-backed fast workspace search tool with regex and globbing.
+[ ] LSP-aware symbol search, go-to-definition, and rename tool.
+[ ] Git tool surface: status, diff, blame, log, commit, branch, checkout.
+[ ] GitHub PR / issue integration via the gh CLI.
+[ ] Live token-usage and cost meter per turn and per session.
+[ ] Context-window % indicator with auto-compaction trigger near the limit.
+[ ] Cancel-in-flight with Esc and graceful tool interruption mid-call.
+[ ] Mid-run prompt injection so the user can steer without restarting.
+[ ] Web search and URL fetch tools for live information.
+[ ] Plan mode: read-only, produce and approve a plan before any edits.
+[ ] Auto-accept toggle for trusted edits to skip prompts in dev loops.
+[ ] Permission allowlist / denylist persisted per project.
+[ ] Sandbox mode: containerized or rootless filesystem for risky runs.
+[ ] Pre / post lifecycle hooks (on-start, on-edit, on-stop, on-error).
+[ ] Mid-session model picker to swap between providers and sizes.
+[ ] .ipynb notebook read + cell-level edit support.
+[ ] Custom slash-command registry loaded from disk.
+[ ] Inline build / test / lint error feedback piped back to the agent.
+[ ] VS Code and JetBrains extension bridge over local IPC.
+[ ] Cron-scheduled and headless cloud runs for unattended jobs.
+[ ] Theme system with light, dark, and custom palettes.
+[ ] Vim keybindings in the input field.
+[ ] Bash session persistence (env, cwd, shell state across tool calls).
+[ ] Git-worktree isolation for risky or speculative changes.
+[ ] Auto-detected project type (node/python/rust/go) with tuned defaults.
+[ ] Inline cost ceiling per session that aborts on overrun.
+[ ] Background long-running tasks (PR reviews, scans) with notifications.
+
+
+==============================================================================
+SECTION 2 — DIFFERENTIATORS: leverage our orchestration model to overtake
+==============================================================================
+
+[ ] Live orchestration graph in the TUI showing the DAG of active subagents.
+[ ] Per-subagent context budget — each branch gets its own isolated window.
+[ ] Speculative parallel subagents exploring competing approaches in parallel.
+[ ] Auto-routing of subtasks to the best-fit specialist persona registry.
+[ ] Cost-aware dispatch: cheap model for trivial steps, premium for hard ones.
+[ ] Verifier subagent that critiques every edit before it's committed.
+[ ] Result memoization so identical subtasks reuse prior subagent outputs.
+[ ] Differential context — each subagent only sees the slice it actually needs.
+[ ] Map-reduce file ops: one subagent per file, aggregated into one patch.
+[ ] Time-boxed subagents that surface partial results when the deadline hits.
+[ ] Token-budget rebalancing across active branches mid-run.
+[ ] Adaptive depth — orchestrator decides max delegation depth per task.
+[ ] Conflict-resolution layer that merges concurrent subagent edits.
+[ ] Per-subagent tool restriction enforcing least-privilege per role.
+[ ] Per-subagent tool budgets (cap run_command, write_file, web_fetch counts).
+[ ] Auto-summarized handoffs between subagent steps to compact context.
+[ ] Composable agent recipes: save successful task graphs as reusable templates.
+[ ] Live human steering — interject a hint into a single subagent in-flight.
+[ ] Per-task telemetry: tokens, latency, success rate, retry count, cost.
+[ ] Conditional decomposition that skips orchestration entirely on trivial prompts.
+[ ] Self-prompted goal restatement by orchestrator before each delegation.
+[ ] Subagent retry with revised prompt on failure or low-confidence output.
+[ ] Long-horizon project memory keyed by subagent role rather than session.
+[ ] Cross-conversation knowledge graph built from past subagent outputs.
+[ ] Hot-swap of model per subagent based on observed task difficulty.
+[ ] Sync and async inter-subagent query channels so one agent can ask another.
+[ ] Streaming partial-output aggregation merged live from concurrent subagents.
+[ ] Workspace snapshot-and-rollback per subagent run for safe exploration.
+[ ] Best-of-N voting across speculative subagents to pick the final answer.
+[ ] Shared scratchpad / blackboard for cross-agent intermediate facts.
+[ ] Causal trace replay — re-run a past task graph with one edited subprompt.
+[ ] Auto-derived specialist personas from the project's own code conventions.
+[ ] Confidence-scored outputs from each subagent feeding orchestrator decisions.
+[ ] Per-subagent retry-on-divergence when two parallel branches disagree.
+[ ] Live "explain why" — orchestrator narrates its decomposition decisions on demand.
