@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useRef } from "react";
-import { Box, Text, Static, useApp, useInput } from "ink";
-import TextInput from "ink-text-input";
+import { Box, Text, Static, useApp } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent } from "../api/agent.js";
 import type { ChatMessage } from "../api/agent.js";
 import { Welcome } from "./Logo.js";
+import { MultilineInput } from "./MultilineInput.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -116,10 +116,14 @@ function InputBar({
   input,
   onChange,
   onSubmit,
+  onHistoryUp,
+  onHistoryDown,
 }: {
   input: string;
   onChange: (s: string) => void;
   onSubmit: (s: string) => void;
+  onHistoryUp: () => void;
+  onHistoryDown: () => void;
 }) {
   return (
     <Box flexDirection="column">
@@ -133,10 +137,12 @@ function InputBar({
           {"› "}
         </Text>
         <Box flexGrow={1}>
-          <TextInput
+          <MultilineInput
             value={input}
             onChange={onChange}
             onSubmit={onSubmit}
+            onHistoryUp={onHistoryUp}
+            onHistoryDown={onHistoryDown}
             placeholder="type a message or / for commands…"
           />
         </Box>
@@ -144,8 +150,8 @@ function InputBar({
       <Box paddingX={1}>
         <Text dimColor>↵ </Text>
         <Text dimColor>send  ·  </Text>
+        <Text dimColor>\↵ newline  ·  </Text>
         <Text dimColor>↓/↑ history  ·  </Text>
-        <Text dimColor>/help  ·  </Text>
         <Text dimColor>ctrl-c to exit</Text>
       </Box>
     </Box>
@@ -173,37 +179,35 @@ export function App() {
     setItems((prev) => [...prev, { id, role, content }]);
   }, []);
 
-  // ↓ moves to the previous (older) prompt
-  // ↑ moves to the later (newer) prompt, eventually restoring the in-progress draft
-  useInput((_inputCh, key) => {
+  // ↓ on the bottom line of the input → previous (older) prompt
+  const handleHistoryDown = useCallback(() => {
     if (running) return;
-    if (key.downArrow) {
-      if (history.length === 0) return;
-      if (historyIndex === -1) {
-        setDraft(input);
-        const next = history.length - 1;
-        setHistoryIndex(next);
-        setInput(history[next]);
-      } else if (historyIndex > 0) {
-        const next = historyIndex - 1;
-        setHistoryIndex(next);
-        setInput(history[next]);
-      }
-      return;
+    if (history.length === 0) return;
+    if (historyIndex === -1) {
+      setDraft(input);
+      const next = history.length - 1;
+      setHistoryIndex(next);
+      setInput(history[next]);
+    } else if (historyIndex > 0) {
+      const next = historyIndex - 1;
+      setHistoryIndex(next);
+      setInput(history[next]);
     }
-    if (key.upArrow) {
-      if (historyIndex === -1) return;
-      if (historyIndex < history.length - 1) {
-        const next = historyIndex + 1;
-        setHistoryIndex(next);
-        setInput(history[next]);
-      } else {
-        setHistoryIndex(-1);
-        setInput(draft);
-      }
-      return;
+  }, [running, history, historyIndex, input]);
+
+  // ↑ on the top line of the input → later (newer) prompt; restores draft at end
+  const handleHistoryUp = useCallback(() => {
+    if (running) return;
+    if (historyIndex === -1) return;
+    if (historyIndex < history.length - 1) {
+      const next = historyIndex + 1;
+      setHistoryIndex(next);
+      setInput(history[next]);
+    } else {
+      setHistoryIndex(-1);
+      setInput(draft);
     }
-  });
+  }, [running, history, historyIndex, draft]);
 
   const handleInputChange = useCallback(
     (value: string) => {
@@ -255,7 +259,7 @@ export function App() {
         if (cmd === "help") {
           append(
             "system",
-            "commands\n  /help    show this help\n  /clear   reset the conversation context\n  /exit    quit axon\n\nshortcuts\n  ↵        send the current message\n  ctrl-c   quit at any time",
+            "commands\n  /help    show this help\n  /clear   reset the conversation context\n  /exit    quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  ctrl-c        quit at any time",
           );
           return;
         }
@@ -345,6 +349,8 @@ export function App() {
             input={input}
             onChange={handleInputChange}
             onSubmit={handleSubmit}
+            onHistoryUp={handleHistoryUp}
+            onHistoryDown={handleHistoryDown}
           />
         </Box>
       )}
