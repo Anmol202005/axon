@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from "react";
-import { Box, Text, Static, useApp } from "ink";
+import { Box, Text, Static, useApp, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent } from "../api/agent.js";
 import type { ChatMessage } from "../api/agent.js";
@@ -24,20 +24,28 @@ type StaticEntry =
   | { kind: "msg"; item: Item };
 
 function Message({ item }: { item: Item }) {
+  const { stdout } = useStdout();
+  const termWidth = stdout?.columns ?? 80;
+
   if (item.role === "user") {
+    // One <Text> per line so the grey background fills each row cleanly —
+    // an embedded \n inside a single <Text> breaks the bg fill.
+    const lines = item.content.split("\n");
     return (
       <Box marginBottom={1} flexDirection="column">
-        <Box>
-          <Text color="cyan" bold>
-            ▎
-          </Text>
-          <Text color="cyan" bold>
-            {" you"}
-          </Text>
-        </Box>
-        <Box paddingLeft={2}>
-          <Text>{item.content}</Text>
-        </Box>
+        {lines.map((line, i) => {
+          const prefix = i === 0 ? "> " : "  ";
+          const body = prefix + line;
+          const padded =
+            body.length < termWidth
+              ? body + " ".repeat(termWidth - body.length)
+              : body;
+          return (
+            <Text key={i} backgroundColor="gray">
+              {padded}
+            </Text>
+          );
+        })}
       </Box>
     );
   }
