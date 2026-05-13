@@ -24,6 +24,7 @@ export interface LogEntry {
 
 export type AgentEvent =
   | { type: "token"; content: string }
+  | { type: "token_reset" }
   | { type: "log"; entry: LogEntry }
   | { type: "file_changed"; path: string; action: "write" | "delete" }
   | { type: "done" }

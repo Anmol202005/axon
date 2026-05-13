@@ -67,7 +67,13 @@ function Message({ item }: { item: Item }) {
   );
 }
 
-function Working({ activity }: { activity: string }) {
+function Working({
+  activity,
+  liveText,
+}: {
+  activity: string;
+  liveText: string;
+}) {
   return (
     <Box flexDirection="column" marginY={1}>
       <Box>
@@ -83,7 +89,23 @@ function Working({ activity }: { activity: string }) {
           <Text dimColor>· {activity}</Text>
         </Box>
       ) : null}
-      <Box paddingLeft={4}>
+      {liveText ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Box>
+            <Text color="green" bold>
+              ●
+            </Text>
+            <Text color="green" bold>
+              {" axon"}
+            </Text>
+            <Text dimColor>  (streaming…)</Text>
+          </Box>
+          <Box paddingLeft={2}>
+            <Text>{liveText}</Text>
+          </Box>
+        </Box>
+      ) : null}
+      <Box paddingLeft={4} marginTop={liveText ? 1 : 0}>
         <Text dimColor>press ctrl-c to stop</Text>
       </Box>
     </Box>
@@ -141,6 +163,8 @@ export function App() {
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [draft, setDraft] = useState("");
+  const [liveText, setLiveText] = useState("");
+  const liveTextRef = useRef("");
   const idRef = useRef(0);
 
   const append = useCallback((role: Role, content: string) => {
@@ -243,6 +267,8 @@ export function App() {
       setRunning(true);
       setError(null);
       setActivity("");
+      liveTextRef.current = "";
+      setLiveText("");
 
       const history: ChatMessage[] = [
         ...items
@@ -259,13 +285,22 @@ export function App() {
         const result = await runAgent({
           messages: history,
           onEvent: (ev) => {
-            if (ev.type === "log") setActivity(ev.entry.msg);
+            if (ev.type === "token") {
+              liveTextRef.current += ev.content;
+              setLiveText(liveTextRef.current);
+            } else if (ev.type === "token_reset") {
+              liveTextRef.current = "";
+              setLiveText("");
+            } else if (ev.type === "log") setActivity(ev.entry.msg);
             else if (ev.type === "file_changed")
               setActivity(`${ev.action} ${ev.path}`);
             else if (ev.type === "error") setError(ev.message);
           },
         });
-        append("assistant", result.text || "(no output)");
+        append(
+          "assistant",
+          result.text || liveTextRef.current || "(no output)",
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
@@ -273,6 +308,8 @@ export function App() {
       } finally {
         setRunning(false);
         setActivity("");
+        liveTextRef.current = "";
+        setLiveText("");
       }
     },
     [running, items, contextStart, exit, append, recordHistory],
@@ -295,7 +332,7 @@ export function App() {
         }
       </Static>
       {running ? (
-        <Working activity={activity} />
+        <Working activity={activity} liveText={liveText} />
       ) : (
         <Box flexDirection="column" marginTop={1}>
           {error && (

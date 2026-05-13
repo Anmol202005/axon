@@ -111,6 +111,13 @@ export async function runAgent(
       workspaceRoot,
       onFileChange,
       extraTools,
+      // Stream tokens from the orchestrator's model only. Sub-agents build a
+      // separate model without these callbacks, so their output stays out of
+      // the UI's live area.
+      onModelStart: () => emit({ type: "token_reset" }),
+      onModelToken: (token) => {
+        if (token) emit({ type: "token", content: token });
+      },
     });
     const result = await agent.invoke({
       messages: toLangchainHistory(messages),
@@ -120,7 +127,6 @@ export async function runAgent(
       "info",
       `■ orchestrator finished · ${runState.callCount} sub-agent call(s) · ${finalText.length} chars`,
     );
-    if (finalText) emit({ type: "token", content: finalText });
     emit({ type: "done" });
     return { text: finalText, callCount: runState.callCount };
   } catch (err) {

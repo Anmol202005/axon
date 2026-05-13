@@ -24,6 +24,11 @@ export interface BuildAgentOptions {
   // Extra tools loaded outside the builder (e.g. MCP). Passed through to
   // sub-agents so the whole tree sees the same tool surface.
   extraTools?: unknown[];
+  // Streaming callbacks. Attached to THIS agent's model only — sub-agents
+  // built via delegate get a fresh model without these handlers, so only the
+  // orchestrator streams to the UI.
+  onModelStart?: () => void;
+  onModelToken?: (token: string) => void;
 }
 
 export function buildAgent(opts: BuildAgentOptions): ReactAgent {
@@ -35,6 +40,8 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     workspaceRoot = process.cwd(),
     onFileChange,
     extraTools = [],
+    onModelStart,
+    onModelToken,
   } = opts;
 
   const indent = "  ".repeat(depth);
@@ -65,8 +72,22 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     );
   }
 
+  const wantStream = !!(onModelStart || onModelToken);
+  const callbacks = wantStream
+    ? [
+        {
+          handleLLMStart: async () => {
+            onModelStart?.();
+          },
+          handleLLMNewToken: async (token: string) => {
+            onModelToken?.(token);
+          },
+        },
+      ]
+    : undefined;
+
   return createAgent({
-    model: buildModel(),
+    model: buildModel({ callbacks, streaming: wantStream }),
     systemPrompt,
     tools: tools as never,
   });
