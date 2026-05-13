@@ -5,6 +5,7 @@ import { runAgent } from "../api/agent.js";
 import type { ChatMessage } from "../api/agent.js";
 import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
+import { renderMarkdown } from "./markdown.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -41,6 +42,7 @@ function Message({ item }: { item: Item }) {
     );
   }
   if (item.role === "assistant") {
+    const rendered = renderMarkdown(item.content);
     return (
       <Box marginBottom={1} flexDirection="column">
         <Box>
@@ -52,7 +54,7 @@ function Message({ item }: { item: Item }) {
           </Text>
         </Box>
         <Box paddingLeft={2}>
-          <Text>{item.content}</Text>
+          <Text>{rendered}</Text>
         </Box>
       </Box>
     );
