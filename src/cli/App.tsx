@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from "react";
-import { Box, Text, Static, useApp } from "ink";
+import { Box, Text, Static, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import { runAgent } from "../api/agent.js";
@@ -92,11 +92,11 @@ function Working({ activity }: { activity: string }) {
 
 function InputBar({
   input,
-  setInput,
+  onChange,
   onSubmit,
 }: {
   input: string;
-  setInput: (s: string) => void;
+  onChange: (s: string) => void;
   onSubmit: (s: string) => void;
 }) {
   return (
@@ -113,7 +113,7 @@ function InputBar({
         <Box flexGrow={1}>
           <TextInput
             value={input}
-            onChange={setInput}
+            onChange={onChange}
             onSubmit={onSubmit}
             placeholder="type a message or / for commands…"
           />
@@ -122,8 +122,8 @@ function InputBar({
       <Box paddingX={1}>
         <Text dimColor>↵ </Text>
         <Text dimColor>send  ·  </Text>
+        <Text dimColor>↓/↑ history  ·  </Text>
         <Text dimColor>/help  ·  </Text>
-        <Text dimColor>/clear  ·  </Text>
         <Text dimColor>ctrl-c to exit</Text>
       </Box>
     </Box>
@@ -138,6 +138,9 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [activity, setActivity] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [draft, setDraft] = useState("");
   const idRef = useRef(0);
 
   const append = useCallback((role: Role, content: string) => {
@@ -146,11 +149,63 @@ export function App() {
     setItems((prev) => [...prev, { id, role, content }]);
   }, []);
 
+  // ↓ moves to the previous (older) prompt
+  // ↑ moves to the later (newer) prompt, eventually restoring the in-progress draft
+  useInput((_inputCh, key) => {
+    if (running) return;
+    if (key.downArrow) {
+      if (history.length === 0) return;
+      if (historyIndex === -1) {
+        setDraft(input);
+        const next = history.length - 1;
+        setHistoryIndex(next);
+        setInput(history[next]);
+      } else if (historyIndex > 0) {
+        const next = historyIndex - 1;
+        setHistoryIndex(next);
+        setInput(history[next]);
+      }
+      return;
+    }
+    if (key.upArrow) {
+      if (historyIndex === -1) return;
+      if (historyIndex < history.length - 1) {
+        const next = historyIndex + 1;
+        setHistoryIndex(next);
+        setInput(history[next]);
+      } else {
+        setHistoryIndex(-1);
+        setInput(draft);
+      }
+      return;
+    }
+  });
+
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setInput(value);
+      if (historyIndex !== -1) {
+        setHistoryIndex(-1);
+        setDraft("");
+      }
+    },
+    [historyIndex],
+  );
+
+  const recordHistory = useCallback((text: string) => {
+    setHistory((prev) =>
+      prev[prev.length - 1] === text ? prev : [...prev, text],
+    );
+    setHistoryIndex(-1);
+    setDraft("");
+  }, []);
+
   const handleSubmit = useCallback(
     async (value: string) => {
       const trimmed = value.trim();
       if (!trimmed || running) return;
       setInput("");
+      recordHistory(trimmed);
 
       if (trimmed.startsWith("/")) {
         const cmd = trimmed.slice(1).toLowerCase();
@@ -220,7 +275,7 @@ export function App() {
         setActivity("");
       }
     },
-    [running, items, contextStart, exit, append],
+    [running, items, contextStart, exit, append, recordHistory],
   );
 
   const staticEntries: StaticEntry[] = [
@@ -251,7 +306,7 @@ export function App() {
           )}
           <InputBar
             input={input}
-            setInput={setInput}
+            onChange={handleInputChange}
             onSubmit={handleSubmit}
           />
         </Box>
