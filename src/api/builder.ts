@@ -7,6 +7,7 @@ import type {
 import { newRunState } from "./types.js";
 import { buildModel } from "./model.js";
 import { createFileTools } from "./tools/files.js";
+import { createShellTool } from "./tools/shell.js";
 import { createCallAgentTool } from "./tools/delegate.js";
 
 // ===========================================================================
@@ -39,8 +40,9 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
   const indent = "  ".repeat(depth);
   const canDelegate = depth < state.maxDepth;
   const fileTools = createFileTools(workspaceRoot, log, onFileChange, indent);
+  const shellTool = createShellTool(workspaceRoot, log, indent);
 
-  const baseTools = [...fileTools, ...extraTools];
+  const baseTools = [...fileTools, shellTool, ...extraTools];
   const tools = canDelegate
     ? [
         ...baseTools,

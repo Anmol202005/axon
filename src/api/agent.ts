@@ -11,6 +11,7 @@ export * from "./model.js";
 export * from "./builder.js";
 export * from "./runner.js";
 export { createFileTools, safeJoin } from "./tools/files.js";
+export { createShellTool } from "./tools/shell.js";
 export { createCallAgentTool } from "./tools/delegate.js";
 export {
   createSummarizeTool,

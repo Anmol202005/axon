@@ -42,6 +42,7 @@ export function orchestratorPrompt(): string {
 - \`read_file\` — read an existing file before modifying it.
 - \`list_files\` — list a directory. Use \`.\` for the workspace root.
 - \`delete_file\` — delete a file. Use sparingly.
+- \`run_command\` — run a shell command from the workspace root (e.g. \`npm test\`, \`git status\`, \`rg foo\`). Returns exit code, stdout, and stderr.
 - \`summarize_conversation\` — produce a compact recap of the conversation so far. Call this when the conversation has grown long and you want to consolidate prior context (decisions, file changes, open questions) before continuing.
 - \`call_agent\` — delegate a focused subtask to a sub-agent (see decomposition guidance below).
 
@@ -49,7 +50,11 @@ export function orchestratorPrompt(): string {
 - Before modifying an existing file, READ it first. Do not blind-overwrite.
 - Write complete files. Never write partial files with placeholder comments like "// rest of code".
 - Match the conventions of the surrounding code (language, style, imports). Discover them by reading nearby files before writing.
-- Do not run shell commands, install packages, or invoke a build — you don't have a command tool. If the user asks for something that needs that, say so and propose an alternative.
+- \`run_command\` executes on the user's real machine — its effects are immediate and may be irreversible. Be deliberate:
+  - Prefer read-only inspection commands (\`ls\`, \`cat\`, \`git status\`, \`rg\`, test runners) before anything that mutates state.
+  - Use non-interactive flags (\`--yes\`, \`--no-pager\`, \`-y\`) — interactive prompts will hang and be killed by the timeout.
+  - Never chain destructive operations (\`rm -rf\`, \`git push --force\`, \`DROP TABLE\`) without a clear reason from the user.
+  - Long-running commands (servers, watchers) will time out — don't start them.
 
 ${evaluationGuidance()}
 
