@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { Box, Text, Static, useApp, useStdout } from "ink";
 import Spinner from "ink-spinner";
-import { runAgent } from "../api/agent.js";
+import { runAgent, buildModel, summarizeMessages } from "../api/agent.js";
 import type {
   ChatMessage,
   ToolApprovalDecision,
@@ -11,6 +11,12 @@ import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
 import { renderMarkdown } from "./markdown.js";
 import { DiffApproval, type DecisionMeta } from "./DiffApproval.js";
+import { expandMentions } from "./mentions.js";
+import {
+  compactThreshold,
+  contextUsage,
+  estimateMessagesTokens,
+} from "./tokens.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -133,13 +139,21 @@ function InputBar({
   onSubmit,
   onHistoryUp,
   onHistoryDown,
+  usage,
 }: {
   input: string;
   onChange: (s: string) => void;
   onSubmit: (s: string) => void;
   onHistoryUp: () => void;
   onHistoryDown: () => void;
+  usage: { pct: number; level: "green" | "yellow" | "red" };
 }) {
+  const usageColor =
+    usage.level === "red"
+      ? "red"
+      : usage.level === "yellow"
+        ? "yellow"
+        : "green";
   return (
     <Box flexDirection="column">
       <Box
@@ -158,7 +172,7 @@ function InputBar({
             onSubmit={onSubmit}
             onHistoryUp={onHistoryUp}
             onHistoryDown={onHistoryDown}
-            placeholder="type a message or / for commands…"
+            placeholder="type a message, @path to attach, or / for commands…"
           />
         </Box>
       </Box>
@@ -167,7 +181,8 @@ function InputBar({
         <Text dimColor>send  ·  </Text>
         <Text dimColor>\↵ newline  ·  </Text>
         <Text dimColor>↓/↑ history  ·  </Text>
-        <Text dimColor>ctrl-c to exit</Text>
+        <Text dimColor>ctrl-c to exit  ·  </Text>
+        <Text color={usageColor}>ctx {usage.pct}%</Text>
       </Box>
     </Box>
   );
@@ -201,6 +216,21 @@ export function App() {
   // value; mirrored to state for the always-allowed banner.
   const alwaysAllowedRef = useRef<Set<string>>(new Set());
   const [alwaysAllowed, setAlwaysAllowed] = useState<string[]>([]);
+  // Auto-compacted summary of older turns. When set, it's prepended (as a
+  // system message) to every history sent to the agent, and items before
+  // contextStart are dropped from the conversation. Reset on /clear.
+  const [summary, setSummary] = useState<string | null>(null);
+
+  // Coarse context-window usage shown next to the input. Recalculated when
+  // the active context slice or the carried summary changes.
+  const usage = useMemo(() => {
+    const messages = items
+      .slice(contextStart)
+      .filter((i) => i.role !== "system")
+      .map((i) => ({ content: i.content }));
+    if (summary) messages.unshift({ content: summary });
+    return contextUsage(estimateMessagesTokens(messages));
+  }, [items, contextStart, summary]);
 
   const onToolApprovalRequest = useCallback(
     (req: ToolApprovalRequest): Promise<ToolApprovalDecision> => {
@@ -321,6 +351,7 @@ export function App() {
           setError(null);
           alwaysAllowedRef.current = new Set();
           setAlwaysAllowed([]);
+          setSummary(null);
           return;
         }
         if (cmd === "help") {
@@ -334,6 +365,25 @@ export function App() {
         return;
       }
 
+      // Expand @-mentions for the agent. Display still shows the original
+      // text the user typed; only the message sent to the model gets the
+      // <file> blocks appended.
+      let userForAgent = trimmed;
+      try {
+        const expanded = await expandMentions(trimmed, process.cwd());
+        userForAgent = expanded.expanded;
+        if (expanded.skipped.length) {
+          setActivity(
+            `mentions not found: ${expanded.skipped.slice(0, 3).join(" ")}` +
+              (expanded.skipped.length > 3
+                ? ` +${expanded.skipped.length - 3} more`
+                : ""),
+          );
+        }
+      } catch {
+        /* mention expansion is best-effort; fall back to raw text */
+      }
+
       append("user", trimmed);
       setRunning(true);
       setError(null);
@@ -341,15 +391,58 @@ export function App() {
       liveTextRef.current = "";
       setLiveText("");
 
+      // Prior turns from items[] (the just-appended user message is NOT in
+      // this closure's `items` snapshot — it's only in the React state).
+      let priorMessages: ChatMessage[] = items
+        .slice(contextStart)
+        .filter((i) => i.role !== "system")
+        .map<ChatMessage>((i) => ({
+          role: i.role === "user" ? "user" : "assistant",
+          content: i.content,
+        }));
+      let carriedSummary = summary;
+      const sentToModel: ChatMessage[] = carriedSummary
+        ? [{ role: "system", content: carriedSummary }, ...priorMessages]
+        : priorMessages;
+
+      // Auto-compact once prior history crosses the soft threshold. We
+      // include the user's just-typed message in the estimate so we don't
+      // overshoot on a single huge turn.
+      const projected =
+        estimateMessagesTokens(sentToModel) +
+        estimateMessagesTokens([{ content: userForAgent }]);
+      if (projected >= compactThreshold()) {
+        setActivity("compacting prior context…");
+        try {
+          const newSummary = await summarizeMessages(sentToModel, buildModel());
+          carriedSummary = newSummary;
+          setSummary(newSummary);
+          priorMessages = [];
+          // Display marker + advance contextStart so future turns also
+          // skip the older items.
+          idRef.current += 1;
+          const marker: Item = {
+            id: idRef.current,
+            role: "system",
+            content: `── auto-compacted prior context ──\n\n${newSummary}`,
+          };
+          setItems((prev) => {
+            const next = [...prev, marker];
+            setContextStart(next.length);
+            return next;
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setActivity(`compaction failed (${msg}) — sending full history`);
+        }
+      }
+
       const history: ChatMessage[] = [
-        ...items
-          .slice(contextStart)
-          .filter((i) => i.role !== "system")
-          .map<ChatMessage>((i) => ({
-            role: i.role === "user" ? "user" : "assistant",
-            content: i.content,
-          })),
-        { role: "user", content: trimmed },
+        ...(carriedSummary
+          ? [{ role: "system" as const, content: carriedSummary }]
+          : []),
+        ...priorMessages,
+        { role: "user", content: userForAgent },
       ];
 
       try {
@@ -388,6 +481,7 @@ export function App() {
       running,
       items,
       contextStart,
+      summary,
       exit,
       append,
       recordHistory,
@@ -437,6 +531,7 @@ export function App() {
             onSubmit={handleSubmit}
             onHistoryUp={handleHistoryUp}
             onHistoryDown={handleHistoryDown}
+            usage={usage}
           />
         </Box>
       )}

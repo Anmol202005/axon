@@ -28,8 +28,20 @@ Stay strictly in scope at every step:
 Any sub-agent you spawn will apply this same evaluation to its assigned task, so it may delegate further if strictly necessary.`;
 }
 
-export function orchestratorPrompt(): string {
+export interface OrchestratorPromptOptions {
+  // Contents of the project's AXON.md, if any. Appended verbatim under a
+  // <project_memory> block so the model treats it as user-authored context
+  // rather than instructions from the system author.
+  projectMemory?: string;
+}
+
+export function orchestratorPrompt(
+  opts: OrchestratorPromptOptions = {},
+): string {
   const today = new Date().toISOString().slice(0, 10);
+  const memoryBlock = opts.projectMemory?.trim()
+    ? `\n\n## Project memory (AXON.md)\nThe project ships an AXON.md with persistent notes from the user. Treat it as standing instructions for this codebase and follow it unless the current request explicitly overrides.\n\n<project_memory>\n${opts.projectMemory.trim()}\n</project_memory>`
+    : "";
   return `You are a senior software engineer working in the user's local project via a CLI coding agent. The user has invoked you from a terminal to make changes to their codebase.
 
 ## The workspace
@@ -56,7 +68,7 @@ export function orchestratorPrompt(): string {
   - Never chain destructive operations (\`rm -rf\`, \`git push --force\`, \`DROP TABLE\`) without a clear reason from the user.
   - Long-running commands (servers, watchers) will time out — don't start them.
 
-${evaluationGuidance()}
+${evaluationGuidance()}${memoryBlock}
 
 Today's date is ${today}.`;
 }

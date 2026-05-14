@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import type {
   AgentEvent,
   ChatMessage,
@@ -108,9 +110,10 @@ export async function runAgent(
 
   try {
     log("info", `▶ orchestrator received request (workspace=${workspaceRoot})`);
+    const projectMemory = await loadProjectMemory(workspaceRoot, log);
     const runState = newRunState(maxCalls, maxDepth);
     const agent = buildAgent({
-      systemPrompt: orchestratorPrompt(),
+      systemPrompt: orchestratorPrompt({ projectMemory }),
       log,
       depth: 0,
       state: runState,
@@ -145,4 +148,33 @@ export async function runAgent(
   } finally {
     await loadedMcp.close();
   }
+}
+
+// ---------------------------------------------------------------------------
+// loadProjectMemory — reads AXON.md from the workspace root if present.
+// We accept either the canonical name (AXON.md) or a lowercased fallback
+// to be friendly to projects that prefer lowercase filenames. Returns
+// undefined if no memory file exists or it's empty.
+// ---------------------------------------------------------------------------
+
+async function loadProjectMemory(
+  workspaceRoot: string,
+  log: Logger,
+): Promise<string | undefined> {
+  const candidates = ["AXON.md", "axon.md"];
+  for (const name of candidates) {
+    const full = path.join(workspaceRoot, name);
+    try {
+      const text = await fs.readFile(full, "utf8");
+      const trimmed = text.trim();
+      if (!trimmed) continue;
+      log("info", `· loaded project memory from ${name} (${trimmed.length} chars)`);
+      return trimmed;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log("warn", `failed to read ${name}: ${(err as Error).message}`);
+      }
+    }
+  }
+  return undefined;
 }
