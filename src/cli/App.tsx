@@ -7,12 +7,10 @@ import type {
   WriteDecision,
   WriteRequest,
 } from "../api/agent.js";
-import path from "node:path";
 import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
 import { renderMarkdown } from "./markdown.js";
 import { DiffApproval, type DecisionMeta } from "./DiffApproval.js";
-import { openInEditor } from "./openInEditor.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -353,12 +351,9 @@ export function App() {
               liveTextRef.current = "";
               setLiveText("");
             } else if (ev.type === "log") setActivity(ev.entry.msg);
-            else if (ev.type === "file_changed") {
+            else if (ev.type === "file_changed")
               setActivity(`${ev.action} ${ev.path}`);
-              if (ev.action === "write") {
-                openInEditor(path.resolve(process.cwd(), ev.path));
-              }
-            } else if (ev.type === "error") setError(ev.message);
+            else if (ev.type === "error") setError(ev.message);
           },
         });
         append(
