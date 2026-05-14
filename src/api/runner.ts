@@ -3,7 +3,7 @@ import type {
   ChatMessage,
   FileChangeFn,
   Logger,
-  WriteApprover,
+  ToolApprover,
 } from "./types.js";
 import { makeLogEntry, newRunState } from "./types.js";
 import {
@@ -42,10 +42,10 @@ export interface RunAgentOptions {
   summarize?: {
     enabled?: boolean; // default true
   };
-  // Called before any file-mutating tool touches disk. Resolve with the
-  // user's decision (apply / reject, optionally with edited content). When
-  // omitted, writes proceed without prompting.
-  onWriteRequest?: WriteApprover;
+  // Called before every gated tool call. Resolve with the user's decision
+  // (allow_once / always_allow / deny). When omitted, all tools run
+  // unprompted.
+  onToolApprovalRequest?: ToolApprover;
 }
 
 export interface RunAgentResult {
@@ -64,7 +64,7 @@ export async function runAgent(
     maxDepth,
     mcp,
     summarize,
-    onWriteRequest,
+    onToolApprovalRequest,
   } = opts;
 
   if (!messages?.length) {
@@ -117,7 +117,7 @@ export async function runAgent(
       workspaceRoot,
       onFileChange,
       extraTools,
-      approver: onWriteRequest,
+      approver: onToolApprovalRequest,
       // Stream tokens from the orchestrator's model only. Sub-agents build a
       // separate model without these callbacks, so their output stays out of
       // the UI's live area.

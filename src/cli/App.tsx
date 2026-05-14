@@ -1,11 +1,11 @@
-import React, { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Box, Text, Static, useApp, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent } from "../api/agent.js";
 import type {
   ChatMessage,
-  WriteDecision,
-  WriteRequest,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
 } from "../api/agent.js";
 import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
@@ -187,42 +187,55 @@ export function App() {
   const [liveText, setLiveText] = useState("");
   const liveTextRef = useRef("");
   const idRef = useRef(0);
-  const [pendingWrite, setPendingWrite] = useState<WriteRequest | null>(null);
+  const [pendingTool, setPendingTool] = useState<ToolApprovalRequest | null>(
+    null,
+  );
   // Resolver for the currently-pending approval promise. We stash it in a
   // ref so the DiffApproval component (and any later state transitions) can
   // resolve it without re-creating the promise.
-  const writeResolverRef = useRef<((d: WriteDecision) => void) | null>(null);
-  // "Yes, and don't ask again this session" — session-scoped auto-approve.
-  // Held in a ref because the onWriteRequest callback below is memoized and
-  // we want to read the latest value at request time.
-  const autoApproveRef = useRef(false);
-  const [autoApprove, setAutoApprove] = useState(false);
+  const toolResolverRef = useRef<
+    ((d: ToolApprovalDecision) => void) | null
+  >(null);
+  // Tools the user has chosen "Always allow" for during this session.
+  // Stored in a ref so the memoized onToolApprovalRequest reads the latest
+  // value; mirrored to state for the always-allowed banner.
+  const alwaysAllowedRef = useRef<Set<string>>(new Set());
+  const [alwaysAllowed, setAlwaysAllowed] = useState<string[]>([]);
 
-  const onWriteRequest = useCallback(
-    (req: WriteRequest): Promise<WriteDecision> => {
-      if (autoApproveRef.current) {
-        return Promise.resolve<WriteDecision>({ kind: "apply" });
+  const onToolApprovalRequest = useCallback(
+    (req: ToolApprovalRequest): Promise<ToolApprovalDecision> => {
+      if (alwaysAllowedRef.current.has(req.toolName)) {
+        return Promise.resolve<ToolApprovalDecision>({ kind: "allow_once" });
       }
-      return new Promise<WriteDecision>((resolve) => {
-        writeResolverRef.current = resolve;
-        setPendingWrite(req);
+      return new Promise<ToolApprovalDecision>((resolve) => {
+        toolResolverRef.current = resolve;
+        setPendingTool(req);
       });
     },
     [],
   );
 
   const handleDecision = useCallback(
-    (decision: WriteDecision, meta?: DecisionMeta) => {
-      if (meta?.rememberSession) {
-        autoApproveRef.current = true;
-        setAutoApprove(true);
+    (decision: ToolApprovalDecision, _meta?: DecisionMeta) => {
+      if (decision.kind === "always_allow" && pendingTool) {
+        const name = pendingTool.toolName;
+        alwaysAllowedRef.current.add(name);
+        setAlwaysAllowed((prev) =>
+          prev.includes(name) ? prev : [...prev, name],
+        );
       }
-      const resolve = writeResolverRef.current;
-      writeResolverRef.current = null;
-      setPendingWrite(null);
-      resolve?.(decision);
+      const resolve = toolResolverRef.current;
+      toolResolverRef.current = null;
+      setPendingTool(null);
+      // Sub-agents expect a normal allow when always_allow is chosen — the
+      // wrapper itself doesn't differentiate; the UI does, via the Set above.
+      resolve?.(
+        decision.kind === "always_allow"
+          ? { kind: "allow_once" }
+          : decision,
+      );
     },
-    [],
+    [pendingTool],
   );
 
   const append = useCallback((role: Role, content: string) => {
@@ -306,8 +319,8 @@ export function App() {
             return next;
           });
           setError(null);
-          autoApproveRef.current = false;
-          setAutoApprove(false);
+          alwaysAllowedRef.current = new Set();
+          setAlwaysAllowed([]);
           return;
         }
         if (cmd === "help") {
@@ -342,7 +355,7 @@ export function App() {
       try {
         const result = await runAgent({
           messages: history,
-          onWriteRequest,
+          onToolApprovalRequest,
           onEvent: (ev) => {
             if (ev.type === "token") {
               liveTextRef.current += ev.content;
@@ -371,7 +384,15 @@ export function App() {
         setLiveText("");
       }
     },
-    [running, items, contextStart, exit, append, recordHistory, onWriteRequest],
+    [
+      running,
+      items,
+      contextStart,
+      exit,
+      append,
+      recordHistory,
+      onToolApprovalRequest,
+    ],
   );
 
   const staticEntries: StaticEntry[] = [
@@ -390,8 +411,8 @@ export function App() {
           )
         }
       </Static>
-      {pendingWrite ? (
-        <DiffApproval request={pendingWrite} onDecide={handleDecision} />
+      {pendingTool ? (
+        <DiffApproval request={pendingTool} onDecide={handleDecision} />
       ) : running ? (
         <Working activity={activity} liveText={liveText} />
       ) : (
@@ -402,10 +423,11 @@ export function App() {
               <Text color="red">{error}</Text>
             </Box>
           )}
-          {autoApprove && (
+          {alwaysAllowed.length > 0 && (
             <Box marginBottom={1}>
-              <Text color="yellow">
-                ⚡ auto-approving writes this session · /clear to reset
+              <Text color="grey" dimColor>
+                always-allowed this session: {alwaysAllowed.join(", ")} ·
+                /clear to reset
               </Text>
             </Box>
           )}

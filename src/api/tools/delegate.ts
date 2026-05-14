@@ -5,7 +5,7 @@ import type {
   AgentRunState,
   FileChangeFn,
   Logger,
-  WriteApprover,
+  ToolApprover,
 } from "../types.js";
 import { extractText } from "../messages.js";
 import { shortRole, subAgentPrompt, truncate } from "../prompts.js";
@@ -23,7 +23,7 @@ export interface CallAgentToolOptions {
   workspaceRoot: string;
   onFileChange: FileChangeFn | undefined;
   extraTools?: unknown[];
-  approver?: WriteApprover;
+  approver?: ToolApprover;
 }
 
 export function createCallAgentTool(opts: CallAgentToolOptions) {

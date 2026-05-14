@@ -17,7 +17,7 @@ SECTION 1 — PARITY: match the current market
 [x] Multi-line input with shift+enter newline and bracketed-paste support.
 [x] Markdown rendering with syntax-highlighted code blocks in replies.
 [x] Diff preview with apply / reject / edit before any file write lands.
-[ ] Per-tool approval flow: allow once / always allow / deny.
+[x] Per-tool approval flow: allow once / always allow / deny.
 [ ] Project memory file (AXON.md) auto-loaded into every session.
 [ ] File @-mentions to inject files, ranges, or selections as context.
 [ ] Image / screenshot paste and drag-drop for multimodal prompts.

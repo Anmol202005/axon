@@ -1,48 +1,47 @@
-import React, { useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { Box, Text, useInput } from "ink";
-import type { WriteDecision, WriteRequest } from "../api/types.js";
+import type {
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+} from "../api/types.js";
 import { MultilineInput } from "./MultilineInput.js";
 
 // ===========================================================================
-// DiffApproval — captures the user's decision for a pending write. Three
-// options, Claude Code style:
-//   1. Yes
-//   2. Yes, and don't ask again this session
-//   3. No, and tell axon what to do (esc)
-//
-// The actual diff body is intentionally not rendered here — visual diffing
-// will come back through a proper IDE integration later. For now we only
-// announce what the agent wants to do and let the user accept or push back.
+// ToolApproval — captures the user's decision for a pending tool call.
+// Three options, Claude Code style:
+//   1. Allow once
+//   2. Always allow `<tool>` this session
+//   3. Deny, and tell axon what to do (esc)
 // ===========================================================================
 
-const OPTIONS = [
-  "Yes",
-  "Yes, and don't ask again this session",
-  "No, and tell axon what to do (esc)",
-];
-
 export interface DecisionMeta {
-  // When true, the caller should auto-approve subsequent writes for the
-  // remainder of the session without showing this UI.
+  // When true, the caller should auto-approve all subsequent calls of the
+  // SAME tool for the remainder of the session.
   rememberSession?: boolean;
 }
 
-interface DiffApprovalProps {
-  request: WriteRequest;
-  onDecide: (decision: WriteDecision, meta?: DecisionMeta) => void;
+interface ToolApprovalProps {
+  request: ToolApprovalRequest;
+  onDecide: (decision: ToolApprovalDecision, meta?: DecisionMeta) => void;
 }
 
 type Mode = "menu" | "feedback";
 
-export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
+export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
   const [mode, setMode] = useState<Mode>("menu");
   const [selected, setSelected] = useState(0);
   const [feedback, setFeedback] = useState("");
 
+  const options = [
+    "Allow once",
+    `Always allow \`${request.toolName}\` this session`,
+    "Deny, and tell axon what to do (esc)",
+  ];
+
   const pick = useCallback(
     (idx: number) => {
-      if (idx === 0) onDecide({ kind: "apply" });
-      else if (idx === 1) onDecide({ kind: "apply" }, { rememberSession: true });
+      if (idx === 0) onDecide({ kind: "allow_once" });
+      else if (idx === 1) onDecide({ kind: "always_allow" });
       else if (idx === 2) setMode("feedback");
     },
     [onDecide],
@@ -52,9 +51,9 @@ export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
   useInput(
     (input, key) => {
       if (key.upArrow) {
-        setSelected((s) => (s + OPTIONS.length - 1) % OPTIONS.length);
+        setSelected((s) => (s + options.length - 1) % options.length);
       } else if (key.downArrow) {
-        setSelected((s) => (s + 1) % OPTIONS.length);
+        setSelected((s) => (s + 1) % options.length);
       } else if (key.return) {
         pick(selected);
       } else if (key.escape) {
@@ -81,38 +80,31 @@ export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
   const handleFeedbackSubmit = useCallback(
     (val: string) => {
       const reason = val.trim() || "no reason given";
-      onDecide({ kind: "reject", reason });
+      onDecide({ kind: "deny", reason });
     },
     [onDecide],
   );
 
-  const isNewFile =
-    request.action === "write" && request.oldContent === undefined;
-  const isDelete = request.action === "delete";
-  const headerLabel = isDelete
-    ? "delete"
-    : isNewFile
-      ? "create"
-      : "edit";
+  const summary = humanizeToolCall(request.toolName, request.args);
 
   return (
     <Box flexDirection="column" marginY={1}>
       <Box>
-        <Text color="yellow" bold>{`⚠ ${headerLabel} `}</Text>
-        <Text color="cyan" bold>{request.path}</Text>
+        <Text color="yellow" bold>{"⚠ "}</Text>
+        <Text bold>{"axon wants to run "}</Text>
+        <Text color="cyan" bold>{request.toolName}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text dimColor>{summary}</Text>
       </Box>
 
       <Box marginTop={1}>
         {mode === "menu" ? (
           <Box flexDirection="column">
             <Box marginBottom={1}>
-              <Text>{"Do you want to "}</Text>
-              <Text bold>{headerLabel}</Text>
-              <Text>{" "}</Text>
-              <Text color="cyan" bold>{request.path}</Text>
-              <Text>{"?"}</Text>
+              <Text>{"Allow this tool call?"}</Text>
             </Box>
-            {OPTIONS.map((opt, i) => {
+            {options.map((opt, i) => {
               const active = i === selected;
               return (
                 <Box key={i}>
@@ -125,7 +117,7 @@ export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
             })}
             <Box marginTop={1}>
               <Text dimColor>
-                ↑/↓ move · ↵ select · 1/2/3 shortcut · esc = no
+                ↑/↓ move · ↵ select · 1/2/3 shortcut · esc = deny
               </Text>
             </Box>
           </Box>
@@ -141,7 +133,7 @@ export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
                   value={feedback}
                   onChange={setFeedback}
                   onSubmit={handleFeedbackSubmit}
-                  placeholder="describe what to change…"
+                  placeholder="describe what to do instead…"
                 />
               </Box>
             </Box>
@@ -153,4 +145,45 @@ export function DiffApproval({ request, onDecide }: DiffApprovalProps) {
       </Box>
     </Box>
   );
+}
+
+// ---------------------------------------------------------------------------
+// humanizeToolCall — short one-line summary of what the tool is about to do.
+// We special-case the built-in tools we know; everything else (MCP, future
+// additions) falls back to a truncated JSON of args.
+// ---------------------------------------------------------------------------
+
+function humanizeToolCall(
+  name: string,
+  args: Record<string, unknown>,
+): string {
+  const str = (v: unknown): string =>
+    typeof v === "string" ? v : JSON.stringify(v ?? "");
+  switch (name) {
+    case "write_file":
+      return `write ${str(args.path)} (${(str(args.content) ?? "").length} bytes)`;
+    case "delete_file":
+      return `delete ${str(args.path)}`;
+    case "run_command":
+      return `$ ${truncate(str(args.command), 100)}`;
+    case "call_agent": {
+      const role = truncate(str(args.systemPrompt), 40);
+      const task = truncate(str(args.prompt), 60);
+      return `delegate → ${role} :: ${task}`;
+    }
+    case "summarize_conversation":
+      return "summarize conversation so far";
+    default: {
+      try {
+        return truncate(JSON.stringify(args), 120);
+      } catch {
+        return "(unprintable args)";
+      }
+    }
+  }
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }

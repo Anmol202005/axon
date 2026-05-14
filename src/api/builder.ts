@@ -1,9 +1,10 @@
-import { createAgent, type ReactAgent } from "langchain";
+import { createAgent, tool, type ReactAgent } from "langchain";
+import { randomUUID } from "node:crypto";
 import type {
   AgentRunState,
   FileChangeFn,
   Logger,
-  WriteApprover,
+  ToolApprover,
 } from "./types.js";
 import { newRunState } from "./types.js";
 import { buildModel } from "./model.js";
@@ -15,6 +16,17 @@ import { createCallAgentTool } from "./tools/delegate.js";
 // agent builder
 // ===========================================================================
 
+// Tools that never go through the approver. Pure reads with no workspace
+// side effects, plus the internal orchestration tools (delegate, summarize)
+// which would otherwise prompt on every sub-agent spawn or context compact.
+// Anything that writes, deletes, executes, or talks to MCP must be gated.
+const ALWAYS_ALLOWED_TOOLS = new Set<string>([
+  "read_file",
+  "list_files",
+  "call_agent",
+  "summarize_conversation",
+]);
+
 export interface BuildAgentOptions {
   systemPrompt: string;
   log?: Logger;
@@ -25,9 +37,9 @@ export interface BuildAgentOptions {
   // Extra tools loaded outside the builder (e.g. MCP). Passed through to
   // sub-agents so the whole tree sees the same tool surface.
   extraTools?: unknown[];
-  // Optional approver consulted before any file-mutating tool touches disk.
-  // Shared with sub-agents so every write across the tree is gated.
-  approver?: WriteApprover;
+  // Optional approver consulted before every gated tool call. Shared with
+  // sub-agents so every tool invocation across the tree is gated.
+  approver?: ToolApprover;
   // Streaming callbacks. Attached to THIS agent's model only — sub-agents
   // built via delegate get a fresh model without these handlers, so only the
   // orchestrator streams to the UI.
@@ -51,17 +63,11 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
 
   const indent = "  ".repeat(depth);
   const canDelegate = depth < state.maxDepth;
-  const fileTools = createFileTools(
-    workspaceRoot,
-    log,
-    onFileChange,
-    indent,
-    approver,
-  );
+  const fileTools = createFileTools(workspaceRoot, log, onFileChange, indent);
   const shellTool = createShellTool(workspaceRoot, log, indent);
 
   const baseTools = [...fileTools, shellTool, ...extraTools];
-  const tools = canDelegate
+  const rawTools = canDelegate
     ? [
         ...baseTools,
         createCallAgentTool({
@@ -76,6 +82,10 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
         }),
       ]
     : baseTools;
+
+  const tools = approver
+    ? rawTools.map((t) => wrapToolWithApproval(t, approver, indent, log))
+    : rawTools;
 
   if (!canDelegate) {
     log?.(
@@ -103,4 +113,46 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     systemPrompt,
     tools: tools as never,
   });
+}
+
+// ---------------------------------------------------------------------------
+// wrapToolWithApproval — returns a new langchain tool with the same name /
+// description / schema as the original, but whose body first asks the
+// approver. The wrapper does NOT track "always allow" state itself — that
+// belongs to whoever installed the approver (the CLI), so we get the same
+// answer for free on every wrapped call until the caller short-circuits.
+// ---------------------------------------------------------------------------
+
+function wrapToolWithApproval(
+  rawTool: any,
+  approver: ToolApprover,
+  indent: string,
+  log: Logger | undefined,
+): any {
+  const name: string = rawTool?.name ?? "<unknown tool>";
+  if (ALWAYS_ALLOWED_TOOLS.has(name)) return rawTool;
+
+  return tool(
+    async (args: any) => {
+      const decision = await approver({
+        id: randomUUID(),
+        toolName: name,
+        args: (args ?? {}) as Record<string, unknown>,
+      });
+      if (decision.kind === "deny") {
+        const reason = decision.reason?.trim() || "no reason given";
+        log?.(
+          "warn",
+          `${indent}✗ ${name} denied by user (${reason})`,
+        );
+        return `User denied ${name}: ${reason}. Do not retry this exact call — ask the user how they'd like you to proceed.`;
+      }
+      return await rawTool.invoke(args);
+    },
+    {
+      name,
+      description: rawTool?.description ?? "",
+      schema: rawTool?.schema,
+    },
+  );
 }

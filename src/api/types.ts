@@ -36,32 +36,36 @@ export type FileChangeFn = (
 ) => void;
 
 // ---------------------------------------------------------------------------
-// write approval — every file-mutating tool consults a WriteApprover (when
-// one is supplied) before touching disk. The CLI uses this to show a diff
-// preview and capture an apply / reject / edit decision from the user.
+// per-tool approval — every tool call (except a small built-in allowlist
+// of read-only tools) is gated by a ToolApprover. The CLI uses this to
+// prompt the user with allow-once / always-allow / deny.
 // ---------------------------------------------------------------------------
 
-export type WriteAction = "write" | "delete";
-
-export interface WriteRequest {
+export interface ToolApprovalRequest {
   id: string;
-  path: string;
-  action: WriteAction;
-  // Existing file contents, if any. Undefined for brand-new files.
-  oldContent: string | undefined;
-  // Proposed contents. Undefined for deletes.
-  newContent: string | undefined;
+  // Tool's canonical name (e.g. "write_file", "run_command", "call_agent",
+  // or any MCP tool name). The UI uses this both to display and to scope
+  // an "always allow" decision to this tool only.
+  toolName: string;
+  // Raw arguments the agent passed to the tool. The UI may pretty-print
+  // a subset (path, command, etc.) but treat anything in here as untrusted
+  // for display purposes.
+  args: Record<string, unknown>;
 }
 
-export type WriteDecision =
-  // Apply the write. `content` lets the approver substitute edited bytes
-  // (used by the CLI's "edit in $EDITOR" flow). Ignored for deletes.
-  | { kind: "apply"; content?: string }
-  // Skip the write. `reason` is surfaced to the agent as the tool result so
-  // it can react (e.g. ask the user what to change).
-  | { kind: "reject"; reason?: string };
+export type ToolApprovalDecision =
+  // Allow this single invocation.
+  | { kind: "allow_once" }
+  // Allow this invocation and all future calls of the same tool for the
+  // session. Tracked by the UI, not by the wrapper itself.
+  | { kind: "always_allow" }
+  // Refuse the call. `reason` is surfaced to the agent so it can ask the
+  // user how to proceed instead of retrying.
+  | { kind: "deny"; reason?: string };
 
-export type WriteApprover = (req: WriteRequest) => Promise<WriteDecision>;
+export type ToolApprover = (
+  req: ToolApprovalRequest,
+) => Promise<ToolApprovalDecision>;
 
 export type Logger = (level: LogLevel, msg: string) => void;
 
