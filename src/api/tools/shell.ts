@@ -16,12 +16,18 @@ export function createShellTool(
   workspaceRoot: string,
   log: Logger | undefined,
   indent: string,
+  abortSignal?: AbortSignal,
 ) {
   return tool(
     async ({ command, timeoutMs }) => {
       const timeout = clampTimeout(timeoutMs);
       log?.("info", `${indent}$ ${truncateOneLine(command, 120)}`);
-      const result = await execCommand(command, workspaceRoot, timeout);
+      const result = await execCommand(
+        command,
+        workspaceRoot,
+        timeout,
+        abortSignal,
+      );
       const suffix = result.timedOut
         ? ` (timed out after ${timeout}ms)`
         : "";
@@ -72,12 +78,25 @@ function execCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
+  abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
+
+    if (abortSignal?.aborted) {
+      resolve({
+        code: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        error: "cancelled by user before spawn",
+      });
+      return;
+    }
 
     let child;
     try {
@@ -103,10 +122,22 @@ function execCommand(
       child.kill("SIGKILL");
     }, timeoutMs);
 
+    const onAbort = () => {
+      cancelled = true;
+      child.kill("SIGTERM");
+      // Give it a moment; if it's still around, SIGKILL.
+      setTimeout(() => {
+        if (!settled) child.kill("SIGKILL");
+      }, 500);
+    };
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+
     const settle = (result: ExecResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      if (cancelled) result = { ...result, error: "cancelled by user" };
       resolve(result);
     };
 

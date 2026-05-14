@@ -24,6 +24,8 @@ export interface CallAgentToolOptions {
   onFileChange: FileChangeFn | undefined;
   extraTools?: unknown[];
   approver?: ToolApprover;
+  abortSignal?: AbortSignal;
+  onModelUsage?: (usage: { input: number; output: number }) => void;
 }
 
 export function createCallAgentTool(opts: CallAgentToolOptions) {
@@ -36,6 +38,8 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
     onFileChange,
     extraTools = [],
     approver,
+    abortSignal,
+    onModelUsage,
   } = opts;
 
   return tool(
@@ -67,10 +71,13 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
         onFileChange,
         extraTools,
         approver,
+        abortSignal,
+        onModelUsage,
       });
-      const result = await subAgent.invoke({
-        messages: [new HumanMessage(prompt)],
-      });
+      const result = await subAgent.invoke(
+        { messages: [new HumanMessage(prompt)] },
+        abortSignal ? { signal: abortSignal } : undefined,
+      );
       const text = extractText(result.messages.at(-1)) || "";
       log?.(
         "info",

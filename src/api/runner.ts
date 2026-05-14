@@ -48,6 +48,10 @@ export interface RunAgentOptions {
   // (allow_once / always_allow / deny). When omitted, all tools run
   // unprompted.
   onToolApprovalRequest?: ToolApprover;
+  // Aborting this signal cancels in-flight agent.invoke and tools (shell
+  // children are SIGTERM'd then SIGKILL'd). The runner surfaces this as a
+  // "cancelled" event and resolves cleanly.
+  signal?: AbortSignal;
 }
 
 export interface RunAgentResult {
@@ -67,6 +71,7 @@ export async function runAgent(
     mcp,
     summarize,
     onToolApprovalRequest,
+    signal,
   } = opts;
 
   if (!messages?.length) {
@@ -121,6 +126,7 @@ export async function runAgent(
       onFileChange,
       extraTools,
       approver: onToolApprovalRequest,
+      abortSignal: signal,
       // Stream tokens from the orchestrator's model only. Sub-agents build a
       // separate model without these callbacks, so their output stays out of
       // the UI's live area.
@@ -128,10 +134,12 @@ export async function runAgent(
       onModelToken: (token) => {
         if (token) emit({ type: "token", content: token });
       },
+      onModelUsage: (usage) => emit({ type: "usage", usage }),
     });
-    const result = await agent.invoke({
-      messages: toLangchainHistory(messages),
-    });
+    const result = await agent.invoke(
+      { messages: toLangchainHistory(messages) },
+      signal ? { signal } : undefined,
+    );
     const finalText = extractText(result.messages.at(-1)) || "";
     log(
       "info",
@@ -140,6 +148,14 @@ export async function runAgent(
     emit({ type: "done" });
     return { text: finalText, callCount: runState.callCount };
   } catch (err) {
+    // Caller cancelled via abort signal — translate to a clean event and
+    // return rather than throwing, so the UI doesn't have to special-case
+    // it as an error.
+    if (signal?.aborted || isAbortError(err)) {
+      log("warn", "orchestrator cancelled by user");
+      emit({ type: "cancelled" });
+      return { text: "", callCount: 0 };
+    }
     const message =
       err instanceof Error ? err.message : "Internal error";
     log("error", `orchestrator error: ${message}`);
@@ -148,6 +164,14 @@ export async function runAgent(
   } finally {
     await loadedMcp.close();
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  const name = (err as { name?: string }).name;
+  if (name === "AbortError") return true;
+  const message = (err as { message?: string }).message ?? "";
+  return /abort|cancel/i.test(message);
 }
 
 // ---------------------------------------------------------------------------

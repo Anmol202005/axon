@@ -22,12 +22,22 @@ export interface LogEntry {
   msg: string;
 }
 
+export interface TokenUsage {
+  input: number;
+  output: number;
+}
+
 export type AgentEvent =
   | { type: "token"; content: string }
   | { type: "token_reset" }
   | { type: "log"; entry: LogEntry }
   | { type: "file_changed"; path: string; action: "write" | "delete" }
+  // Emitted after each model invocation that reports usage. Counts are
+  // for that single LLM call (orchestrator or sub-agent); the UI is
+  // expected to sum them for per-turn / per-session totals.
+  | { type: "usage"; usage: TokenUsage; model?: string }
   | { type: "done" }
+  | { type: "cancelled" }
   | { type: "error"; message: string };
 
 export type FileChangeFn = (

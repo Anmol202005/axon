@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo } from "react";
-import { Box, Text, Static, useApp, useStdout } from "ink";
+import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent, buildModel, summarizeMessages } from "../api/agent.js";
 import type {
@@ -17,6 +17,21 @@ import {
   contextUsage,
   estimateMessagesTokens,
 } from "./tokens.js";
+import {
+  computeCost,
+  formatCost,
+  formatTokens,
+  priceRate,
+} from "./pricing.js";
+import {
+  deleteSession,
+  listSessions,
+  loadSession,
+  newSessionId,
+  saveSession,
+  titleFromItems,
+  type SessionSnapshot,
+} from "./persistence.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -91,9 +106,17 @@ function Message({ item }: { item: Item }) {
 function Working({
   activity,
   liveText,
+  turnInput,
+  turnOutput,
+  turnCost,
+  knownPricing,
 }: {
   activity: string;
   liveText: string;
+  turnInput: number;
+  turnOutput: number;
+  turnCost: number;
+  knownPricing: boolean;
 }) {
   return (
     <Box flexDirection="column" marginY={1}>
@@ -127,7 +150,10 @@ function Working({
         </Box>
       ) : null}
       <Box paddingLeft={4} marginTop={liveText ? 1 : 0}>
-        <Text dimColor>press ctrl-c to stop</Text>
+        <Text dimColor>{`esc to cancel · ctrl-c to quit · this turn ${formatTokens(turnInput)}↑ ${formatTokens(turnOutput)}↓`}</Text>
+        {knownPricing && (
+          <Text dimColor>{` · ${formatCost(turnCost)}`}</Text>
+        )}
       </Box>
     </Box>
   );
@@ -140,6 +166,7 @@ function InputBar({
   onHistoryUp,
   onHistoryDown,
   usage,
+  meter,
 }: {
   input: string;
   onChange: (s: string) => void;
@@ -147,6 +174,12 @@ function InputBar({
   onHistoryUp: () => void;
   onHistoryDown: () => void;
   usage: { pct: number; level: "green" | "yellow" | "red" };
+  meter: {
+    sessionInput: number;
+    sessionOutput: number;
+    sessionCost: number;
+    knownPricing: boolean;
+  };
 }) {
   const usageColor =
     usage.level === "red"
@@ -177,21 +210,38 @@ function InputBar({
         </Box>
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>↵ </Text>
-        <Text dimColor>send  ·  </Text>
-        <Text dimColor>\↵ newline  ·  </Text>
-        <Text dimColor>↓/↑ history  ·  </Text>
-        <Text dimColor>ctrl-c to exit  ·  </Text>
+        <Text dimColor>↵ send  ·  \↵ newline  ·  ↓/↑ history  ·  ctrl-c quit  ·  </Text>
         <Text color={usageColor}>ctx {usage.pct}%</Text>
+        <Text dimColor>
+          {`  ·  ${formatTokens(meter.sessionInput)}↑ ${formatTokens(meter.sessionOutput)}↓`}
+        </Text>
+        {meter.knownPricing && (
+          <Text dimColor>{`  ·  ${formatCost(meter.sessionCost)}`}</Text>
+        )}
       </Box>
     </Box>
   );
 }
 
-export function App() {
+export interface AppProps {
+  workspaceRoot?: string;
+  initialSnapshot?: SessionSnapshot;
+}
+
+export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
+  const root = workspaceRoot ?? process.cwd();
   const { exit } = useApp();
-  const [items, setItems] = useState<Item[]>([]);
-  const [contextStart, setContextStart] = useState(0);
+  const sessionIdRef = useRef<string>(
+    initialSnapshot?.id ?? newSessionId(),
+  );
+  // Items / context-pointer / summary / always-allowed seeded from the
+  // resumed snapshot when one is provided; otherwise empty.
+  const [items, setItems] = useState<Item[]>(
+    initialSnapshot?.items.map((i) => ({ ...i })) ?? [],
+  );
+  const [contextStart, setContextStart] = useState(
+    initialSnapshot?.contextStart ?? 0,
+  );
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [activity, setActivity] = useState("");
@@ -201,7 +251,13 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [liveText, setLiveText] = useState("");
   const liveTextRef = useRef("");
-  const idRef = useRef(0);
+  // Seed idRef so newly appended items get unique ids that don't collide
+  // with whatever the snapshot already contained.
+  const idRef = useRef(
+    initialSnapshot
+      ? initialSnapshot.items.reduce((m, i) => Math.max(m, i.id), 0)
+      : 0,
+  );
   const [pendingTool, setPendingTool] = useState<ToolApprovalRequest | null>(
     null,
   );
@@ -214,12 +270,40 @@ export function App() {
   // Tools the user has chosen "Always allow" for during this session.
   // Stored in a ref so the memoized onToolApprovalRequest reads the latest
   // value; mirrored to state for the always-allowed banner.
-  const alwaysAllowedRef = useRef<Set<string>>(new Set());
-  const [alwaysAllowed, setAlwaysAllowed] = useState<string[]>([]);
+  const alwaysAllowedRef = useRef<Set<string>>(
+    new Set(initialSnapshot?.alwaysAllowed ?? []),
+  );
+  const [alwaysAllowed, setAlwaysAllowed] = useState<string[]>(
+    initialSnapshot?.alwaysAllowed ?? [],
+  );
   // Auto-compacted summary of older turns. When set, it's prepended (as a
   // system message) to every history sent to the agent, and items before
   // contextStart are dropped from the conversation. Reset on /clear.
-  const [summary, setSummary] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(
+    initialSnapshot?.summary ?? null,
+  );
+
+  // Live token/cost meter. We keep two scopes: a per-turn counter that
+  // updates as model calls stream in, and a session total accumulated
+  // across turns. Both reset on /clear; turn resets at the start of each
+  // submit.
+  const [turnUsage, setTurnUsage] = useState({ input: 0, output: 0 });
+  const turnUsageRef = useRef({ input: 0, output: 0 });
+  const [sessionUsage, setSessionUsage] = useState(
+    initialSnapshot?.sessionUsage ?? { input: 0, output: 0 },
+  );
+  const rate = useMemo(() => priceRate(process.env.AI_MODEL), []);
+  const sessionCost = useMemo(
+    () => computeCost(sessionUsage.input, sessionUsage.output, rate),
+    [sessionUsage, rate],
+  );
+  const turnCost = useMemo(
+    () => computeCost(turnUsage.input, turnUsage.output, rate),
+    [turnUsage, rate],
+  );
+
+  // AbortController for the in-flight agent run. Esc aborts it.
+  const abortRef = useRef<AbortController | null>(null);
 
   // Coarse context-window usage shown next to the input. Recalculated when
   // the active context slice or the carried summary changes.
@@ -231,6 +315,55 @@ export function App() {
     if (summary) messages.unshift({ content: summary });
     return contextUsage(estimateMessagesTokens(messages));
   }, [items, contextStart, summary]);
+
+  // Snapshot helper — called at end of each turn. Best-effort: persistence
+  // failures are surfaced in the activity line but never block the UI.
+  const persist = useCallback(
+    async (override?: {
+      items?: Item[];
+      contextStart?: number;
+      summary?: string | null;
+      sessionUsage?: { input: number; output: number };
+    }) => {
+      const itemsOut = override?.items ?? items;
+      if (itemsOut.length === 0) return;
+      const snap: SessionSnapshot = {
+        v: 1,
+        id: sessionIdRef.current,
+        workspaceRoot: root,
+        createdAt: initialSnapshot?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        title: initialSnapshot?.title || titleFromItems(itemsOut),
+        items: itemsOut.map((i) => ({
+          id: i.id,
+          role: i.role,
+          content: i.content,
+        })),
+        contextStart: override?.contextStart ?? contextStart,
+        summary: override?.summary !== undefined ? override.summary : summary,
+        alwaysAllowed: Array.from(alwaysAllowedRef.current),
+        sessionUsage: override?.sessionUsage ?? sessionUsage,
+      };
+      try {
+        await saveSession(snap);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setActivity(`could not save session: ${msg}`);
+      }
+    },
+    [items, contextStart, summary, sessionUsage, root, initialSnapshot],
+  );
+
+  // Global Esc handler — abort the running turn. Disabled while the
+  // approval menu / feedback input is up so those can handle Esc locally.
+  useInput(
+    (_input, key) => {
+      if (key.escape && running && !pendingTool) {
+        abortRef.current?.abort();
+      }
+    },
+    { isActive: running && !pendingTool },
+  );
 
   const onToolApprovalRequest = useCallback(
     (req: ToolApprovalRequest): Promise<ToolApprovalDecision> => {
@@ -331,9 +464,82 @@ export function App() {
       recordHistory(trimmed);
 
       if (trimmed.startsWith("/")) {
-        const cmd = trimmed.slice(1).toLowerCase();
+        const [verb, ...rest] = trimmed.slice(1).split(/\s+/);
+        const cmd = verb.toLowerCase();
         if (cmd === "exit" || cmd === "quit") {
           exit();
+          return;
+        }
+        if (cmd === "sessions") {
+          try {
+            const entries = await listSessions(root);
+            if (entries.length === 0) {
+              append("system", "no saved sessions in this workspace.");
+            } else {
+              const here = sessionIdRef.current;
+              const lines = entries
+                .map((e) => {
+                  const mark = e.id === here ? " (current)" : "";
+                  return `  ${e.id}${mark}\n    ${e.title}\n    ${e.turns} turns · ${e.updatedAt.slice(0, 19).replace("T", " ")}`;
+                })
+                .join("\n");
+              append("system", `sessions in this workspace:\n${lines}`);
+            }
+          } catch (err) {
+            append(
+              "system",
+              `error listing sessions: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          return;
+        }
+        if (cmd === "resume") {
+          const id = rest[0];
+          if (!id) {
+            append("system", "usage: /resume <session-id>  (see /sessions)");
+            return;
+          }
+          try {
+            const snap = await loadSession(root, id);
+            sessionIdRef.current = snap.id;
+            setItems(snap.items.map((i) => ({ ...i })));
+            setContextStart(snap.contextStart);
+            setSummary(snap.summary ?? null);
+            setSessionUsage(snap.sessionUsage);
+            alwaysAllowedRef.current = new Set(snap.alwaysAllowed);
+            setAlwaysAllowed(snap.alwaysAllowed);
+            idRef.current = snap.items.reduce(
+              (m, i) => Math.max(m, i.id),
+              0,
+            );
+            append("system", `── resumed session ${snap.id} ──`);
+          } catch (err) {
+            append(
+              "system",
+              `could not resume ${id}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          return;
+        }
+        if (cmd === "forget") {
+          const id = rest[0];
+          if (!id) {
+            append("system", "usage: /forget <session-id>");
+            return;
+          }
+          if (id === sessionIdRef.current) {
+            append("system", "refuse: that's the current session.");
+            return;
+          }
+          try {
+            await deleteSession(root, id);
+            append("system", `deleted session ${id}.`);
+          } catch (err) {
+            append(
+              "system",
+              `error deleting ${id}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
           return;
         }
         if (cmd === "clear") {
@@ -352,12 +558,15 @@ export function App() {
           alwaysAllowedRef.current = new Set();
           setAlwaysAllowed([]);
           setSummary(null);
+          setSessionUsage({ input: 0, output: 0 });
+          setTurnUsage({ input: 0, output: 0 });
+          turnUsageRef.current = { input: 0, output: 0 };
           return;
         }
         if (cmd === "help") {
           append(
             "system",
-            "commands\n  /help    show this help\n  /clear   reset the conversation context\n  /exit    quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  ctrl-c        quit at any time",
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time",
           );
           return;
         }
@@ -390,6 +599,10 @@ export function App() {
       setActivity("");
       liveTextRef.current = "";
       setLiveText("");
+      turnUsageRef.current = { input: 0, output: 0 };
+      setTurnUsage({ input: 0, output: 0 });
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       // Prior turns from items[] (the just-appended user message is NOT in
       // this closure's `items` snapshot — it's only in the React state).
@@ -445,10 +658,12 @@ export function App() {
         { role: "user", content: userForAgent },
       ];
 
+      let cancelled = false;
       try {
         const result = await runAgent({
           messages: history,
           onToolApprovalRequest,
+          signal: controller.signal,
           onEvent: (ev) => {
             if (ev.type === "token") {
               liveTextRef.current += ev.content;
@@ -459,22 +674,45 @@ export function App() {
             } else if (ev.type === "log") setActivity(ev.entry.msg);
             else if (ev.type === "file_changed")
               setActivity(`${ev.action} ${ev.path}`);
-            else if (ev.type === "error") setError(ev.message);
+            else if (ev.type === "usage") {
+              turnUsageRef.current = {
+                input: turnUsageRef.current.input + ev.usage.input,
+                output: turnUsageRef.current.output + ev.usage.output,
+              };
+              setTurnUsage(turnUsageRef.current);
+              setSessionUsage((prev) => ({
+                input: prev.input + ev.usage.input,
+                output: prev.output + ev.usage.output,
+              }));
+            } else if (ev.type === "cancelled") {
+              cancelled = true;
+            } else if (ev.type === "error") setError(ev.message);
           },
         });
-        append(
-          "assistant",
-          result.text || liveTextRef.current || "(no output)",
-        );
+        if (cancelled) {
+          append("system", "── cancelled by user (esc) ──");
+        } else {
+          append(
+            "assistant",
+            result.text || liveTextRef.current || "(no output)",
+          );
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-        append("system", `error: ${msg}`);
+        if (controller.signal.aborted) {
+          append("system", "── cancelled by user (esc) ──");
+        } else {
+          setError(msg);
+          append("system", `error: ${msg}`);
+        }
       } finally {
         setRunning(false);
         setActivity("");
         liveTextRef.current = "";
         setLiveText("");
+        abortRef.current = null;
+        // Best-effort snapshot after every turn.
+        void persist();
       }
     },
     [
@@ -486,6 +724,8 @@ export function App() {
       append,
       recordHistory,
       onToolApprovalRequest,
+      persist,
+      root,
     ],
   );
 
@@ -508,7 +748,14 @@ export function App() {
       {pendingTool ? (
         <DiffApproval request={pendingTool} onDecide={handleDecision} />
       ) : running ? (
-        <Working activity={activity} liveText={liveText} />
+        <Working
+          activity={activity}
+          liveText={liveText}
+          turnInput={turnUsage.input}
+          turnOutput={turnUsage.output}
+          turnCost={turnCost}
+          knownPricing={rate.source !== "unknown"}
+        />
       ) : (
         <Box flexDirection="column" marginTop={1}>
           {error && (
@@ -532,6 +779,12 @@ export function App() {
             onHistoryUp={handleHistoryUp}
             onHistoryDown={handleHistoryDown}
             usage={usage}
+            meter={{
+              sessionInput: sessionUsage.input,
+              sessionOutput: sessionUsage.output,
+              sessionCost,
+              knownPricing: rate.source !== "unknown",
+            }}
           />
         </Box>
       )}

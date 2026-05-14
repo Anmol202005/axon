@@ -40,11 +40,18 @@ export interface BuildAgentOptions {
   // Optional approver consulted before every gated tool call. Shared with
   // sub-agents so every tool invocation across the tree is gated.
   approver?: ToolApprover;
+  // AbortSignal propagated to agent.invoke and to in-flight tools (shell
+  // child processes get SIGTERM). Cancellation surfaces as an aborted
+  // agent.invoke which the runner translates into a "cancelled" event.
+  abortSignal?: AbortSignal;
   // Streaming callbacks. Attached to THIS agent's model only — sub-agents
   // built via delegate get a fresh model without these handlers, so only the
   // orchestrator streams to the UI.
   onModelStart?: () => void;
   onModelToken?: (token: string) => void;
+  // Called on each LLM call that reports token usage. Inputs may be 0 if
+  // the provider doesn't surface counts.
+  onModelUsage?: (usage: { input: number; output: number }) => void;
 }
 
 export function buildAgent(opts: BuildAgentOptions): ReactAgent {
@@ -57,14 +64,16 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     onFileChange,
     extraTools = [],
     approver,
+    abortSignal,
     onModelStart,
     onModelToken,
+    onModelUsage,
   } = opts;
 
   const indent = "  ".repeat(depth);
   const canDelegate = depth < state.maxDepth;
   const fileTools = createFileTools(workspaceRoot, log, onFileChange, indent);
-  const shellTool = createShellTool(workspaceRoot, log, indent);
+  const shellTool = createShellTool(workspaceRoot, log, indent, abortSignal);
 
   const baseTools = [...fileTools, shellTool, ...extraTools];
   const rawTools = canDelegate
@@ -79,6 +88,8 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
           onFileChange,
           extraTools,
           approver,
+          abortSignal,
+          onModelUsage,
         }),
       ]
     : baseTools;
@@ -95,24 +106,66 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
   }
 
   const wantStream = !!(onModelStart || onModelToken);
-  const callbacks = wantStream
-    ? [
-        {
-          handleLLMStart: async () => {
-            onModelStart?.();
+  const wantUsage = !!onModelUsage;
+  const callbacks =
+    wantStream || wantUsage
+      ? [
+          {
+            handleLLMStart: async () => {
+              onModelStart?.();
+            },
+            handleLLMNewToken: async (token: string) => {
+              onModelToken?.(token);
+            },
+            handleLLMEnd: async (output: any) => {
+              if (!onModelUsage) return;
+              const usage = extractUsage(output);
+              if (usage) onModelUsage(usage);
+            },
           },
-          handleLLMNewToken: async (token: string) => {
-            onModelToken?.(token);
-          },
-        },
-      ]
-    : undefined;
+        ]
+      : undefined;
 
   return createAgent({
     model: buildModel({ callbacks, streaming: wantStream }),
     systemPrompt,
     tools: tools as never,
   });
+}
+
+// ---------------------------------------------------------------------------
+// extractUsage — pull input/output token counts out of langchain's LLMResult.
+// Different providers / langchain versions surface counts at different
+// paths; we try the common ones and bail with undefined if none match.
+// ---------------------------------------------------------------------------
+function extractUsage(
+  output: any,
+): { input: number; output: number } | undefined {
+  const sources: any[] = [
+    output?.llmOutput?.tokenUsage,
+    output?.llmOutput?.usage,
+    output?.generations?.[0]?.[0]?.message?.usage_metadata,
+    output?.generations?.[0]?.[0]?.message?.response_metadata?.tokenUsage,
+    output?.generations?.[0]?.[0]?.message?.response_metadata?.usage,
+    output?.generations?.[0]?.[0]?.generationInfo?.usage,
+  ];
+  for (const src of sources) {
+    if (!src) continue;
+    const input =
+      src.promptTokens ??
+      src.prompt_tokens ??
+      src.input_tokens ??
+      src.inputTokens ??
+      0;
+    const out =
+      src.completionTokens ??
+      src.completion_tokens ??
+      src.output_tokens ??
+      src.outputTokens ??
+      0;
+    if (input || out) return { input: Number(input), output: Number(out) };
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -21,15 +21,15 @@ SECTION 1 — PARITY: match the current market
 [x] Project memory file (AXON.md) auto-loaded into every session.
 [x] File @-mentions to inject files, ranges, or selections as context.
 [ ] Image / screenshot paste and drag-drop for multimodal prompts.
-[ ] Conversation persistence and resume by session id.
+[x] Conversation persistence and resume by session id.
 [ ] Session transcript export to markdown or JSON.
 [ ] ripgrep-backed fast workspace search tool with regex and globbing.
 [ ] LSP-aware symbol search, go-to-definition, and rename tool.
 [ ] Git tool surface: status, diff, blame, log, commit, branch, checkout.
 [ ] GitHub PR / issue integration via the gh CLI.
-[ ] Live token-usage and cost meter per turn and per session.
+[x] Live token-usage and cost meter per turn and per session.
 [x] Context-window % indicator with auto-compaction trigger near the limit.
-[ ] Cancel-in-flight with Esc and graceful tool interruption mid-call.
+[x] Cancel-in-flight with Esc and graceful tool interruption mid-call.
 [ ] Mid-run prompt injection so the user can steer without restarting.
 [ ] Web search and URL fetch tools for live information.
 [ ] Plan mode: read-only, produce and approve a plan before any edits.
@@ -66,9 +66,9 @@ Context & memory
 [x] Context-window % indicator with auto-compaction trigger near the limit.
 
 Session lifecycle
-[ ] Conversation persistence and resume by session id.
-[ ] Cancel-in-flight with Esc and graceful tool interruption mid-call.
-[ ] Live token-usage and cost meter per turn and per session.
+[x] Conversation persistence and resume by session id.
+[x] Cancel-in-flight with Esc and graceful tool interruption mid-call.
+[x] Live token-usage and cost meter per turn and per session.
 
 Code-agent capability (table stakes vs Claude Code / Cursor / Aider)
 [ ] ripgrep-backed fast workspace search tool with regex and globbing.
