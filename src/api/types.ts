@@ -35,6 +35,34 @@ export type FileChangeFn = (
   action: "write" | "delete",
 ) => void;
 
+// ---------------------------------------------------------------------------
+// write approval — every file-mutating tool consults a WriteApprover (when
+// one is supplied) before touching disk. The CLI uses this to show a diff
+// preview and capture an apply / reject / edit decision from the user.
+// ---------------------------------------------------------------------------
+
+export type WriteAction = "write" | "delete";
+
+export interface WriteRequest {
+  id: string;
+  path: string;
+  action: WriteAction;
+  // Existing file contents, if any. Undefined for brand-new files.
+  oldContent: string | undefined;
+  // Proposed contents. Undefined for deletes.
+  newContent: string | undefined;
+}
+
+export type WriteDecision =
+  // Apply the write. `content` lets the approver substitute edited bytes
+  // (used by the CLI's "edit in $EDITOR" flow). Ignored for deletes.
+  | { kind: "apply"; content?: string }
+  // Skip the write. `reason` is surfaced to the agent as the tool result so
+  // it can react (e.g. ask the user what to change).
+  | { kind: "reject"; reason?: string };
+
+export type WriteApprover = (req: WriteRequest) => Promise<WriteDecision>;
+
 export type Logger = (level: LogLevel, msg: string) => void;
 
 export interface AgentRunState {

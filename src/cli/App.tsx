@@ -2,10 +2,17 @@ import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, Static, useApp, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent } from "../api/agent.js";
-import type { ChatMessage } from "../api/agent.js";
+import type {
+  ChatMessage,
+  WriteDecision,
+  WriteRequest,
+} from "../api/agent.js";
+import path from "node:path";
 import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
 import { renderMarkdown } from "./markdown.js";
+import { DiffApproval, type DecisionMeta } from "./DiffApproval.js";
+import { openInEditor } from "./openInEditor.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -182,6 +189,43 @@ export function App() {
   const [liveText, setLiveText] = useState("");
   const liveTextRef = useRef("");
   const idRef = useRef(0);
+  const [pendingWrite, setPendingWrite] = useState<WriteRequest | null>(null);
+  // Resolver for the currently-pending approval promise. We stash it in a
+  // ref so the DiffApproval component (and any later state transitions) can
+  // resolve it without re-creating the promise.
+  const writeResolverRef = useRef<((d: WriteDecision) => void) | null>(null);
+  // "Yes, and don't ask again this session" — session-scoped auto-approve.
+  // Held in a ref because the onWriteRequest callback below is memoized and
+  // we want to read the latest value at request time.
+  const autoApproveRef = useRef(false);
+  const [autoApprove, setAutoApprove] = useState(false);
+
+  const onWriteRequest = useCallback(
+    (req: WriteRequest): Promise<WriteDecision> => {
+      if (autoApproveRef.current) {
+        return Promise.resolve<WriteDecision>({ kind: "apply" });
+      }
+      return new Promise<WriteDecision>((resolve) => {
+        writeResolverRef.current = resolve;
+        setPendingWrite(req);
+      });
+    },
+    [],
+  );
+
+  const handleDecision = useCallback(
+    (decision: WriteDecision, meta?: DecisionMeta) => {
+      if (meta?.rememberSession) {
+        autoApproveRef.current = true;
+        setAutoApprove(true);
+      }
+      const resolve = writeResolverRef.current;
+      writeResolverRef.current = null;
+      setPendingWrite(null);
+      resolve?.(decision);
+    },
+    [],
+  );
 
   const append = useCallback((role: Role, content: string) => {
     idRef.current += 1;
@@ -264,6 +308,8 @@ export function App() {
             return next;
           });
           setError(null);
+          autoApproveRef.current = false;
+          setAutoApprove(false);
           return;
         }
         if (cmd === "help") {
@@ -298,6 +344,7 @@ export function App() {
       try {
         const result = await runAgent({
           messages: history,
+          onWriteRequest,
           onEvent: (ev) => {
             if (ev.type === "token") {
               liveTextRef.current += ev.content;
@@ -306,9 +353,12 @@ export function App() {
               liveTextRef.current = "";
               setLiveText("");
             } else if (ev.type === "log") setActivity(ev.entry.msg);
-            else if (ev.type === "file_changed")
+            else if (ev.type === "file_changed") {
               setActivity(`${ev.action} ${ev.path}`);
-            else if (ev.type === "error") setError(ev.message);
+              if (ev.action === "write") {
+                openInEditor(path.resolve(process.cwd(), ev.path));
+              }
+            } else if (ev.type === "error") setError(ev.message);
           },
         });
         append(
@@ -326,7 +376,7 @@ export function App() {
         setLiveText("");
       }
     },
-    [running, items, contextStart, exit, append, recordHistory],
+    [running, items, contextStart, exit, append, recordHistory, onWriteRequest],
   );
 
   const staticEntries: StaticEntry[] = [
@@ -345,7 +395,9 @@ export function App() {
           )
         }
       </Static>
-      {running ? (
+      {pendingWrite ? (
+        <DiffApproval request={pendingWrite} onDecide={handleDecision} />
+      ) : running ? (
         <Working activity={activity} liveText={liveText} />
       ) : (
         <Box flexDirection="column" marginTop={1}>
@@ -353,6 +405,13 @@ export function App() {
             <Box marginBottom={1}>
               <Text color="red">✗ </Text>
               <Text color="red">{error}</Text>
+            </Box>
+          )}
+          {autoApprove && (
+            <Box marginBottom={1}>
+              <Text color="yellow">
+                ⚡ auto-approving writes this session · /clear to reset
+              </Text>
             </Box>
           )}
           <InputBar

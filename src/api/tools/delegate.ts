@@ -1,7 +1,12 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { tool } from "langchain";
 import { z } from "zod";
-import type { AgentRunState, FileChangeFn, Logger } from "../types.js";
+import type {
+  AgentRunState,
+  FileChangeFn,
+  Logger,
+  WriteApprover,
+} from "../types.js";
 import { extractText } from "../messages.js";
 import { shortRole, subAgentPrompt, truncate } from "../prompts.js";
 import { buildAgent } from "../builder.js";
@@ -18,6 +23,7 @@ export interface CallAgentToolOptions {
   workspaceRoot: string;
   onFileChange: FileChangeFn | undefined;
   extraTools?: unknown[];
+  approver?: WriteApprover;
 }
 
 export function createCallAgentTool(opts: CallAgentToolOptions) {
@@ -29,6 +35,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
     workspaceRoot,
     onFileChange,
     extraTools = [],
+    approver,
   } = opts;
 
   return tool(
@@ -59,6 +66,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
         workspaceRoot,
         onFileChange,
         extraTools,
+        approver,
       });
       const result = await subAgent.invoke({
         messages: [new HumanMessage(prompt)],

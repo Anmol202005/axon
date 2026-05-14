@@ -3,6 +3,7 @@ import type {
   AgentRunState,
   FileChangeFn,
   Logger,
+  WriteApprover,
 } from "./types.js";
 import { newRunState } from "./types.js";
 import { buildModel } from "./model.js";
@@ -24,6 +25,9 @@ export interface BuildAgentOptions {
   // Extra tools loaded outside the builder (e.g. MCP). Passed through to
   // sub-agents so the whole tree sees the same tool surface.
   extraTools?: unknown[];
+  // Optional approver consulted before any file-mutating tool touches disk.
+  // Shared with sub-agents so every write across the tree is gated.
+  approver?: WriteApprover;
   // Streaming callbacks. Attached to THIS agent's model only — sub-agents
   // built via delegate get a fresh model without these handlers, so only the
   // orchestrator streams to the UI.
@@ -40,13 +44,20 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     workspaceRoot = process.cwd(),
     onFileChange,
     extraTools = [],
+    approver,
     onModelStart,
     onModelToken,
   } = opts;
 
   const indent = "  ".repeat(depth);
   const canDelegate = depth < state.maxDepth;
-  const fileTools = createFileTools(workspaceRoot, log, onFileChange, indent);
+  const fileTools = createFileTools(
+    workspaceRoot,
+    log,
+    onFileChange,
+    indent,
+    approver,
+  );
   const shellTool = createShellTool(workspaceRoot, log, indent);
 
   const baseTools = [...fileTools, shellTool, ...extraTools];
@@ -61,6 +72,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
           workspaceRoot,
           onFileChange,
           extraTools,
+          approver,
         }),
       ]
     : baseTools;

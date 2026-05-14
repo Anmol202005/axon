@@ -1,8 +1,15 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { tool } from "langchain";
 import { z } from "zod";
-import type { FileChangeFn, Logger } from "../types.js";
+import type {
+  FileChangeFn,
+  Logger,
+  WriteApprover,
+  WriteDecision,
+  WriteRequest,
+} from "../types.js";
 
 // ===========================================================================
 // file tools (local filesystem, rooted at workspaceRoot)
@@ -17,20 +24,59 @@ export function safeJoin(workspaceRoot: string, relative: string): string {
   return resolved;
 }
 
+async function readIfExists(absolute: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(absolute, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+async function approve(
+  approver: WriteApprover | undefined,
+  req: WriteRequest,
+): Promise<WriteDecision> {
+  if (!approver) return { kind: "apply" };
+  return approver(req);
+}
+
 export function createFileTools(
   workspaceRoot: string,
   log: Logger | undefined,
   onFileChange: FileChangeFn | undefined,
   indent: string,
+  approver?: WriteApprover,
 ) {
   const writeFile = tool(
     async ({ path: relPath, content }) => {
       const absolute = safeJoin(workspaceRoot, relPath);
+      const oldContent = await readIfExists(absolute);
+      const decision = await approve(approver, {
+        id: randomUUID(),
+        path: relPath,
+        action: "write",
+        oldContent,
+        newContent: content,
+      });
+      if (decision.kind === "reject") {
+        const reason = decision.reason?.trim() || "no reason given";
+        log?.("warn", `${indent}⏵ write ${relPath} rejected by user (${reason})`);
+        return `User rejected write to ${relPath}: ${reason}. Do not retry the same write — ask the user what they want changed.`;
+      }
+      const finalContent =
+        decision.kind === "apply" && typeof decision.content === "string"
+          ? decision.content
+          : content;
       await fs.mkdir(path.dirname(absolute), { recursive: true });
-      await fs.writeFile(absolute, content, "utf8");
+      await fs.writeFile(absolute, finalContent, "utf8");
       onFileChange?.(relPath, "write");
-      log?.("info", `${indent}✎ write ${relPath} (${content.length} bytes)`);
-      return `Wrote ${relPath} (${content.length} bytes).`;
+      const edited = finalContent !== content ? " (edited by user)" : "";
+      log?.(
+        "info",
+        `${indent}✎ write ${relPath} (${finalContent.length} bytes)${edited}`,
+      );
+      return `Wrote ${relPath} (${finalContent.length} bytes)${edited}.`;
     },
     {
       name: "write_file",
@@ -105,6 +151,22 @@ export function createFileTools(
   const deleteFile = tool(
     async ({ path: relPath }) => {
       const absolute = safeJoin(workspaceRoot, relPath);
+      const oldContent = await readIfExists(absolute);
+      if (oldContent === undefined) {
+        return `Error deleting ${relPath}: file does not exist.`;
+      }
+      const decision = await approve(approver, {
+        id: randomUUID(),
+        path: relPath,
+        action: "delete",
+        oldContent,
+        newContent: undefined,
+      });
+      if (decision.kind === "reject") {
+        const reason = decision.reason?.trim() || "no reason given";
+        log?.("warn", `${indent}⏵ delete ${relPath} rejected by user (${reason})`);
+        return `User rejected delete of ${relPath}: ${reason}. Do not retry — ask the user how to proceed.`;
+      }
       try {
         await fs.unlink(absolute);
         onFileChange?.(relPath, "delete");
