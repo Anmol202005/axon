@@ -1,17 +1,36 @@
 {
-  "name": "axon",
+  "name": "axon-cli",
   "version": "1.0.0",
   "description": "A production-grade TypeScript CLI coding agent",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "axon": "./dist/index.js"
+    "axon": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "author": "Anmol <anmol20102005@gmail.com>",
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "coding-agent",
+    "llm",
+    "anthropic",
+    "openai",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
