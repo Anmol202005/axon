@@ -2,6 +2,7 @@ import React from "react";
 import os from "node:os";
 import { Box, Text } from "ink";
 import { Theme } from "./theme.js";
+import { getActiveConfig } from "./config.js";
 
 // ===========================================================================
 // Logo + welcome banner shown once at startup
@@ -35,7 +36,8 @@ export function Logo() {
 
 export function Welcome() {
   const cwd = prettyPath(process.cwd());
-  const model = process.env.AI_MODEL || "(default)";
+  const cfg = getActiveConfig();
+  const model = cfg?.model ?? "(unset)";
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Logo />

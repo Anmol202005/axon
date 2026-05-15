@@ -1,6 +1,7 @@
 import { tool } from "langchain";
 import { z } from "zod";
 import type { Logger } from "../types.js";
+import { getActiveConfig } from "../../cli/config.js";
 
 // ===========================================================================
 // web tools — search and URL fetch for live information
@@ -82,13 +83,12 @@ export function createWebTools(
         MAX_SEARCH_RESULTS,
       );
 
-      const apiKey = process.env.SERPER_API_KEY?.trim();
+      const apiKey = getActiveConfig()?.serperApiKey?.trim();
       if (!apiKey) {
         return (
-          "Error: SERPER_API_KEY is not set. " +
+          "Error: web search is not configured. " +
           "web_search uses serper.dev (Google results). " +
-          "Sign up at https://serper.dev for a free key (2,500 queries) and " +
-          "export SERPER_API_KEY=<key> in your shell, then retry."
+          "Run /setup inside axon and paste a serper.dev key (free tier: 2,500 queries) when prompted."
         );
       }
 
@@ -115,7 +115,7 @@ export function createWebTools(
     {
       name: "web_search",
       description:
-        "Search the web (Google, via serper.dev) for a query and return a list of result titles, URLs, and snippets, plus an instant-answer when Google has one. Use this to find documentation, GitHub issues, blog posts, or recent answers when you don't already have a URL. Follow up with `web_fetch` to read a specific result. Requires the SERPER_API_KEY environment variable.",
+        "Search the web (Google, via serper.dev) for a query and return a list of result titles, URLs, and snippets, plus an instant-answer when Google has one. Use this to find documentation, GitHub issues, blog posts, or recent answers when you don't already have a URL. Follow up with `web_fetch` to read a specific result. Requires a serper.dev key configured via /setup.",
       schema: z.object({
         query: z.string().describe("Search query string."),
         maxResults: z

@@ -47,6 +47,12 @@ import {
   type SessionSnapshot,
 } from "./persistence.js";
 import {
+  configPath,
+  getActiveConfig,
+  setActiveConfig,
+} from "./config.js";
+import { Onboarding } from "./Onboarding.js";
+import {
   formatCommandList,
   loadCustomCommands,
   substituteArgs,
@@ -302,6 +308,11 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   const planModeRef = useRef(false);
   const [planMode, setPlanMode] = useState(false);
 
+  // In-session BYOK setup. When true the input bar is replaced by the
+  // Onboarding wizard; on save we mutate process.env so subsequent turns
+  // pick up the new provider/model/key without a restart.
+  const [setupMode, setSetupMode] = useState(false);
+
   // Custom slash commands loaded from .axon/commands/*.md (workspace) and
   // ~/.axon/commands/*.md (personal). Mutating commands on disk requires a
   // /reload — we don't watch the filesystem. The ref is what handleSubmit
@@ -375,7 +386,11 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   const [sessionUsage, setSessionUsage] = useState(
     initialSnapshot?.sessionUsage ?? { input: 0, output: 0 },
   );
-  const rate = useMemo(() => priceRate(process.env.AI_MODEL), []);
+  // Snapshot the model at mount so the cost meter has a stable rate for
+  // the session. /setup mid-session does not retroactively re-price prior
+  // turns; new turns under a different model just keep using this rate
+  // until the session ends.
+  const rate = useMemo(() => priceRate(getActiveConfig()?.model), []);
   const sessionCost = useMemo(
     () => computeCost(sessionUsage.input, sessionUsage.output, rate),
     [sessionUsage, rate],
@@ -796,6 +811,31 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           );
           return;
         }
+        if (cmd === "config") {
+          const cfg = getActiveConfig();
+          const provider = cfg?.provider ?? "(unset)";
+          const model = cfg?.model ?? "(unset)";
+          const endpoint =
+            cfg?.provider === "openai" ? (cfg.endpoint ?? "(default)") : "—";
+          const webSearch = cfg?.serperApiKey
+            ? "enabled"
+            : "disabled (no serper key)";
+          append(
+            "system",
+            `current config\n` +
+              `  provider    ${provider}\n` +
+              `  model       ${model}\n` +
+              `  endpoint    ${endpoint}\n` +
+              `  web_search  ${webSearch}\n` +
+              `  file        ${configPath()}\n\n` +
+              `run /setup to change provider / keys / model in place.`,
+          );
+          return;
+        }
+        if (cmd === "setup") {
+          setSetupMode(true);
+          return;
+        }
         if (cmd === "export") {
           const fmt = parseFormat(rest[0]);
           if (!fmt) {
@@ -857,7 +897,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
               : "";
           append(
             "system",
-            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /config            show current provider / model / keys location\n  /setup             re-run BYOK onboarding inline (no restart)\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
               customBlock,
           );
           return;
@@ -1058,7 +1098,25 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           )
         }
       </Static>
-      {pendingTool ? (
+      {setupMode ? (
+        <Onboarding
+          compact
+          reason="re-running setup — saving overwrites "
+          initial={getActiveConfig() ?? undefined}
+          onCancel={() => {
+            setSetupMode(false);
+            append("system", "── setup cancelled — config unchanged ──");
+          }}
+          onComplete={(cfg) => {
+            setActiveConfig(cfg);
+            setSetupMode(false);
+            append(
+              "system",
+              `── config saved · provider=${cfg.provider} · model=${cfg.model} ──`,
+            );
+          }}
+        />
+      ) : pendingTool ? (
         <DiffApproval request={pendingTool} onDecide={handleDecision} />
       ) : running ? (
         <Working
