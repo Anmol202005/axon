@@ -25,3 +25,11 @@ export {
   type SummarizerModel,
 } from "./tools/summarize.js";
 export * from "./mcp/index.js";
+export {
+  detectProjectType,
+  formatProjectContext,
+  type ProjectInfo,
+  type ProjectKind,
+  type ProjectDefaults,
+  type NodePackageManager,
+} from "./projectType.js";

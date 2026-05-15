@@ -22,7 +22,7 @@ SECTION 1 — PARITY: match the current market
 [x] File @-mentions to inject files, ranges, or selections as context.
 [ ] Image / screenshot paste and drag-drop for multimodal prompts.
 [x] Conversation persistence and resume by session id.
-[ ] Session transcript export to markdown or JSON.
+[x] Session transcript export to markdown or JSON.
 [x] ripgrep-backed fast workspace search tool with regex and globbing.
 [ ] LSP-aware symbol search, go-to-definition, and rename tool.
 [x] Git tool surface: status, diff, blame, log, commit, branch, checkout.
@@ -39,7 +39,7 @@ SECTION 1 — PARITY: match the current market
 [ ] Pre / post lifecycle hooks (on-start, on-edit, on-stop, on-error).
 [ ] Mid-session model picker to swap between providers and sizes.
 [ ] .ipynb notebook read + cell-level edit support.
-[ ] Custom slash-command registry loaded from disk.
+[x] Custom slash-command registry loaded from disk.
 [x] Inline build / test / lint error feedback piped back to the agent.
 [ ] VS Code and JetBrains extension bridge over local IPC.
 [ ] Cron-scheduled and headless cloud runs for unattended jobs.
@@ -47,7 +47,7 @@ SECTION 1 — PARITY: match the current market
 [ ] Vim keybindings in the input field.
 [ ] Bash session persistence (env, cwd, shell state across tool calls).
 [ ] Git-worktree isolation for risky or speculative changes.
-[ ] Auto-detected project type (node/python/rust/go) with tuned defaults.
+[x] Auto-detected project type (node/python/rust/go) with tuned defaults.
 [ ] Inline cost ceiling per session that aborts on overrun.
 [ ] Background long-running tasks (PR reviews, scans) with notifications.
 
@@ -81,9 +81,9 @@ Safety & control
 [x] Permission allowlist / denylist persisted per project.
 
 Polish (small, but the product feels amateur without them)
-[ ] Auto-detected project type (node/python/rust/go) with tuned defaults.
-[ ] Custom slash-command registry loaded from disk.
-[ ] Session transcript export to markdown or JSON.
+[x] Auto-detected project type (node/python/rust/go) with tuned defaults.
+[x] Custom slash-command registry loaded from disk.
+[x] Session transcript export to markdown or JSON.
 
 Explicitly out of scope for v1 — punt to v1.1+:
   · Image / screenshot paste                  (nice, not blocking)

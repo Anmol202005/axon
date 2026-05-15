@@ -46,6 +46,13 @@ import {
   titleFromItems,
   type SessionSnapshot,
 } from "./persistence.js";
+import {
+  formatCommandList,
+  loadCustomCommands,
+  substituteArgs,
+  type CustomCommand,
+} from "./commands.js";
+import { exportSession, parseFormat } from "./export.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -302,6 +309,28 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   // user approves a plan); the state is what the UI displays.
   const planModeRef = useRef(false);
   const [planMode, setPlanMode] = useState(false);
+
+  // Custom slash commands loaded from .axon/commands/*.md (workspace) and
+  // ~/.axon/commands/*.md (personal). Mutating commands on disk requires a
+  // /reload — we don't watch the filesystem. The ref is what handleSubmit
+  // reads; the state powers /commands and /help listings.
+  const customCommandsRef = useRef<Map<string, CustomCommand>>(new Map());
+  const [customCommands, setCustomCommands] = useState<CustomCommand[]>([]);
+  const reloadCustomCommands = useCallback(async () => {
+    try {
+      const loaded = await loadCustomCommands(root);
+      customCommandsRef.current = loaded;
+      setCustomCommands(Array.from(loaded.values()));
+      return loaded;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActivity(`could not load custom commands: ${msg}`);
+      return customCommandsRef.current;
+    }
+  }, [root]);
+  useEffect(() => {
+    void reloadCustomCommands();
+  }, [reloadCustomCommands]);
 
   // Per-project persisted allow/deny lists. Loaded once on mount; mutated
   // via the approval menu's "Always allow in this project" option and via
@@ -563,6 +592,12 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
       setInput("");
       recordHistory(trimmed);
 
+      // Set when a custom slash command resolves. Causes the slash-command
+      // branch to fall through into the normal agent path instead of
+      // returning, with this expanded text becoming the prompt the agent
+      // actually receives. The transcript still shows what the user typed.
+      let customCommandPrompt: string | null = null;
+
       if (trimmed.startsWith("/")) {
         const [verb, ...rest] = trimmed.slice(1).split(/\s+/);
         const cmd = verb.toLowerCase();
@@ -754,23 +789,114 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           );
           return;
         }
-        if (cmd === "help") {
+        if (cmd === "commands") {
           append(
             "system",
-            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time",
+            formatCommandList(customCommandsRef.current),
           );
           return;
         }
-        append("system", `unknown command: /${cmd}  (try /help)`);
-        return;
+        if (cmd === "reload") {
+          const loaded = await reloadCustomCommands();
+          append(
+            "system",
+            `reloaded ${loaded.size} custom command(s) from .axon/commands/.`,
+          );
+          return;
+        }
+        if (cmd === "export") {
+          const fmt = parseFormat(rest[0]);
+          if (!fmt) {
+            append(
+              "system",
+              "usage: /export <md|json> [path]  — defaults to .axon/exports/<id>.<ext>",
+            );
+            return;
+          }
+          const destArg = rest[1];
+          // Build a fresh snapshot from current state so the export reflects
+          // unsaved in-flight edits (e.g. the user exports right after a
+          // turn and persistence hasn't flushed yet).
+          const snap: SessionSnapshot = {
+            v: 1,
+            id: sessionIdRef.current,
+            workspaceRoot: root,
+            createdAt:
+              initialSnapshot?.createdAt ?? new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            title: initialSnapshot?.title || titleFromItems(items),
+            items: items.map((i) => ({
+              id: i.id,
+              role: i.role,
+              content: i.content,
+            })),
+            contextStart,
+            summary,
+            alwaysAllowed: Array.from(alwaysAllowedRef.current),
+            sessionUsage,
+          };
+          try {
+            const result = await exportSession({
+              snapshot: snap,
+              format: fmt,
+              workspaceRoot: root,
+              destPath: destArg,
+            });
+            append(
+              "system",
+              `exported ${result.format} (${result.bytes} bytes) → ${result.path}`,
+            );
+          } catch (err) {
+            append(
+              "system",
+              `export failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          return;
+        }
+        if (cmd === "help") {
+          const customBlock =
+            customCommandsRef.current.size > 0
+              ? `\n\ncustom commands (from .axon/commands/)\n${Array.from(
+                  customCommandsRef.current.values(),
+                )
+                  .map((c) => `  /${c.name}${c.argsHint ? ` ${c.argsHint}` : ""} — ${c.description}`)
+                  .join("\n")}`
+              : "";
+          append(
+            "system",
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
+              customBlock,
+          );
+          return;
+        }
+        // Last resort: maybe the user typed a custom command. If so we
+        // substitute and fall through to the normal agent pipeline below.
+        const custom = customCommandsRef.current.get(cmd);
+        if (custom) {
+          const argsText = rest.join(" ");
+          customCommandPrompt = substituteArgs(custom.template, {
+            args: argsText,
+            workspaceRoot: root,
+          });
+          // Fall through — agent pipeline below handles the rest.
+        } else {
+          append(
+            "system",
+            `unknown command: /${cmd}  (try /help or /commands)`,
+          );
+          return;
+        }
       }
 
       // Expand @-mentions for the agent. Display still shows the original
       // text the user typed; only the message sent to the model gets the
-      // <file> blocks appended.
-      let userForAgent = trimmed;
+      // <file> blocks appended. Custom-command expansion (if any) replaces
+      // the message body the agent sees but not the transcript line.
+      const promptForExpansion = customCommandPrompt ?? trimmed;
+      let userForAgent = promptForExpansion;
       try {
-        const expanded = await expandMentions(trimmed, process.cwd());
+        const expanded = await expandMentions(promptForExpansion, process.cwd());
         userForAgent = expanded.expanded;
         if (expanded.skipped.length) {
           setActivity(
@@ -912,11 +1038,14 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
       items,
       contextStart,
       summary,
+      sessionUsage,
+      initialSnapshot,
       exit,
       append,
       recordHistory,
       onToolApprovalRequest,
       persist,
+      reloadCustomCommands,
       root,
     ],
   );
@@ -981,6 +1110,13 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
               <Text color="red" dimColor>
                 project-denied: {permissions.denied.join(", ")} ·
                 /permissions remove &lt;tool&gt; to clear
+              </Text>
+            </Box>
+          )}
+          {customCommands.length > 0 && (
+            <Box marginBottom={1}>
+              <Text color="cyan" dimColor>
+                {customCommands.length} custom command{customCommands.length === 1 ? "" : "s"} loaded · /commands to list · /reload to refresh
               </Text>
             </Box>
           )}

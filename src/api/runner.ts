@@ -20,6 +20,7 @@ import { loadMcpTools } from "./mcp/client.js";
 import { resolveMcpConfig } from "./mcp/config.js";
 import type { McpServerConfig } from "./mcp/types.js";
 import { createSummarizeTool } from "./tools/summarize.js";
+import { detectProjectType, formatProjectContext } from "./projectType.js";
 
 // ===========================================================================
 // runner — programmatic entry point for the CLI
@@ -122,9 +123,18 @@ export async function runAgent(
   try {
     log("info", `▶ orchestrator received request (workspace=${workspaceRoot})`);
     const projectMemory = await loadProjectMemory(workspaceRoot, log);
+    const projectInfo = await detectProjectType(workspaceRoot);
+    if (projectInfo.kind !== "unknown") {
+      log("info", `· detected ${projectInfo.summary}`);
+    }
+    const projectContext = formatProjectContext(projectInfo);
     const runState = newRunState(maxCalls, maxDepth);
     const agent = buildAgent({
-      systemPrompt: orchestratorPrompt({ projectMemory, planMode }),
+      systemPrompt: orchestratorPrompt({
+        projectMemory,
+        projectContext,
+        planMode,
+      }),
       log,
       depth: 0,
       state: runState,
