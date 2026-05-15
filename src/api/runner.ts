@@ -7,7 +7,13 @@ import type {
   Logger,
   ToolApprover,
 } from "./types.js";
-import { makeLogEntry, newRunState } from "./types.js";
+import {
+  DEFAULT_HARD_CAP,
+  DEFAULT_MAX_DEPTH,
+  DEFAULT_SOFT_CAP,
+  makeLogEntry,
+  newRunState,
+} from "./types.js";
 import {
   extractText,
   lastUserInput,
@@ -30,8 +36,31 @@ export interface RunAgentOptions {
   messages: ChatMessage[];
   workspaceRoot?: string;
   onEvent?: (event: AgentEvent) => void;
+  // Hard ceiling on total sub-agent calls in this run. Acts as a runaway-
+  // loop rail; never surfaced to the model. Default: DEFAULT_HARD_CAP (25).
   maxCalls?: number;
+  // Maximum delegation depth. Default: DEFAULT_MAX_DEPTH (1) — orchestrator
+  // delegates to leaf specialists only. Raise it if you want sub-agents to
+  // subcontract.
   maxDepth?: number;
+  // Advisory budget surfaced inside the orchestrator's system prompt. Tells
+  // the planner roughly how many specialists to expect to spend on a task.
+  // Not enforced. Default: DEFAULT_SOFT_CAP (10).
+  softCap?: number;
+  // Optional per-parent fan-out cap. Each individual agent can spawn at
+  // most this many sub-agents. When unset, only the global hardCap
+  // applies.
+  maxCallsPerAgent?: number;
+  // Optional per-depth fan-out caps. Keys are child-depth integers (as
+  // numbers or numeric strings, e.g. {1: 10, 2: 6}). Total spawns at each
+  // depth across all branches must stay below the configured value.
+  maxCallsAtDepth?: Record<number | string, number>;
+  // Optional model-name override for sub-agents. Same provider as the
+  // orchestrator (no provider override). Lets you run cheap/fast leaves
+  // while keeping the heavy model for planning + synthesis.
+  subAgentModel?: string;
+  // When true, `call_agent` rejects calls without a predefined `role`.
+  requireRole?: boolean;
   // MCP configuration. Defaults + user-config file (.forge/mcp.json) are
   // always merged in unless explicitly disabled.
   mcp?: {
@@ -72,14 +101,29 @@ export async function runAgent(
     messages,
     workspaceRoot = process.cwd(),
     onEvent,
-    maxCalls,
-    maxDepth,
+    maxCalls = DEFAULT_HARD_CAP,
+    maxDepth = DEFAULT_MAX_DEPTH,
+    softCap = DEFAULT_SOFT_CAP,
+    maxCallsPerAgent,
+    maxCallsAtDepth,
+    subAgentModel,
+    requireRole,
     mcp,
     summarize,
     planMode,
     onToolApprovalRequest,
     signal,
   } = opts;
+
+  // Normalize maxCallsAtDepth keys to numbers so the delegate lookup
+  // ({state.maxCallsAtDepth[childDepth]}) works regardless of whether the
+  // caller passed numeric or string keys (JSON only carries string keys).
+  const normalizedDepthCaps: Record<number, number> | undefined =
+    maxCallsAtDepth
+      ? Object.fromEntries(
+          Object.entries(maxCallsAtDepth).map(([k, v]) => [Number(k), v]),
+        )
+      : undefined;
 
   if (!messages?.length) {
     throw new Error("'messages' array required");
@@ -128,12 +172,27 @@ export async function runAgent(
       log("info", `· detected ${projectInfo.summary}`);
     }
     const projectContext = formatProjectContext(projectInfo);
-    const runState = newRunState(maxCalls, maxDepth);
+    const runState = newRunState(maxCalls, maxDepth, {
+      maxCallsAtDepth: normalizedDepthCaps,
+      maxCallsPerAgent,
+    });
+    const extras: string[] = [];
+    if (maxCallsPerAgent) extras.push(`perAgent=${maxCallsPerAgent}`);
+    if (normalizedDepthCaps)
+      extras.push(`perDepth=${JSON.stringify(normalizedDepthCaps)}`);
+    if (subAgentModel) extras.push(`subAgentModel=${subAgentModel}`);
+    if (requireRole) extras.push(`requireRole=true`);
+    log(
+      "info",
+      `· architecture: maxDepth=${maxDepth} · softCap=${softCap} · hardCap=${maxCalls}${extras.length ? " · " + extras.join(" · ") : ""}`,
+    );
     const agent = buildAgent({
       systemPrompt: orchestratorPrompt({
         projectMemory,
         projectContext,
         planMode,
+        softCap,
+        maxDepth,
       }),
       log,
       depth: 0,
@@ -144,6 +203,9 @@ export async function runAgent(
       planMode,
       approver: onToolApprovalRequest,
       abortSignal: signal,
+      softCap,
+      subAgentModel,
+      requireRole,
       // Stream tokens from the orchestrator's model only. Sub-agents build a
       // separate model without these callbacks, so their output stays out of
       // the UI's live area.

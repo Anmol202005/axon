@@ -6,7 +6,7 @@ import type {
   Logger,
   ToolApprover,
 } from "./types.js";
-import { newRunState } from "./types.js";
+import { DEFAULT_SOFT_CAP, newRunState } from "./types.js";
 import { buildModel } from "./model.js";
 import { createFileTools } from "./tools/files.js";
 import { createShellTool } from "./tools/shell.js";
@@ -70,6 +70,18 @@ export interface BuildAgentOptions {
   // Called on each LLM call that reports token usage. Inputs may be 0 if
   // the provider doesn't surface counts.
   onModelUsage?: (usage: { input: number; output: number }) => void;
+  // Advisory budget threaded through to the delegate tool so sub-agents
+  // that can themselves delegate (maxDepth > 1) see the same soft cap as
+  // the orchestrator.
+  softCap?: number;
+  // Optional model-name override. When set, this agent is built with that
+  // model instead of the one from the active BYOK config. Used by the
+  // delegation pipeline to put sub-agents on a cheaper/faster model.
+  modelName?: string;
+  // Architecture knobs threaded through to the delegate tool so it can
+  // enforce per-parent / per-depth caps and the role-required policy.
+  subAgentModel?: string;
+  requireRole?: boolean;
 }
 
 export function buildAgent(opts: BuildAgentOptions): ReactAgent {
@@ -87,6 +99,10 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     onModelStart,
     onModelToken,
     onModelUsage,
+    softCap = DEFAULT_SOFT_CAP,
+    modelName,
+    subAgentModel,
+    requireRole,
   } = opts;
 
   const indent = "  ".repeat(depth);
@@ -133,6 +149,9 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
           approver,
           abortSignal,
           onModelUsage,
+          softCap,
+          subAgentModel,
+          requireRole,
         }),
       ]
     : baseTools;
@@ -170,7 +189,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
       : undefined;
 
   return createAgent({
-    model: buildModel({ callbacks, streaming: wantStream }),
+    model: buildModel({ callbacks, streaming: wantStream, modelName }),
     systemPrompt,
     tools: tools as never,
   });

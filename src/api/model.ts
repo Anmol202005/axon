@@ -17,15 +17,20 @@ import { requireActiveConfig } from "../cli/config.js";
 export interface BuildModelOptions {
   callbacks?: Callbacks;
   streaming?: boolean;
+  // Override the model NAME only (provider, API key, endpoint still come
+  // from the active BYOK config). Used by the delegation pipeline so
+  // sub-agents can run on a cheaper/faster model than the orchestrator.
+  modelName?: string;
 }
 
 export function buildModel(opts: BuildModelOptions = {}): BaseChatModel {
   const cfg = requireActiveConfig();
   const streaming = opts.streaming ?? false;
+  const model = opts.modelName?.trim() || cfg.model;
 
   if (cfg.provider === "anthropic") {
     return new ChatAnthropic({
-      model: cfg.model,
+      model,
       apiKey: cfg.apiKey,
       streaming,
       callbacks: opts.callbacks,
@@ -33,7 +38,7 @@ export function buildModel(opts: BuildModelOptions = {}): BaseChatModel {
   }
 
   return new ChatOpenAI({
-    model: cfg.model,
+    model,
     configuration: { baseURL: cfg.endpoint },
     apiKey: cfg.apiKey,
     streaming,

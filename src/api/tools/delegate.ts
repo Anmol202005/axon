@@ -7,8 +7,15 @@ import type {
   Logger,
   ToolApprover,
 } from "../types.js";
+import { DEFAULT_SOFT_CAP } from "../types.js";
 import { extractText } from "../messages.js";
-import { shortRole, subAgentPrompt, truncate } from "../prompts.js";
+import {
+  resolveSubAgentSystemPrompt,
+  shortRole,
+  subAgentPrompt,
+  SUB_AGENT_ROLES,
+  truncate,
+} from "../prompts.js";
 import { buildAgent } from "../builder.js";
 
 // ===========================================================================
@@ -27,6 +34,15 @@ export interface CallAgentToolOptions {
   approver?: ToolApprover;
   abortSignal?: AbortSignal;
   onModelUsage?: (usage: { input: number; output: number }) => void;
+  // Advisory soft cap passed through to sub-agents that can themselves
+  // delegate (only relevant when maxDepth > 1).
+  softCap?: number;
+  // Model name override for sub-agents this tool spawns. When set,
+  // sub-agents are built with this model instead of the orchestrator's.
+  subAgentModel?: string;
+  // When true, calls that don't pass one of the predefined `role` values
+  // are rejected — the orchestrator must use a predefined role.
+  requireRole?: boolean;
 }
 
 export function createCallAgentTool(opts: CallAgentToolOptions) {
@@ -42,30 +58,90 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
     approver,
     abortSignal,
     onModelUsage,
+    softCap = DEFAULT_SOFT_CAP,
+    subAgentModel,
+    requireRole = false,
   } = opts;
 
-  return tool(
-    async ({ systemPrompt: subSystemPrompt, prompt }) => {
-      const role = shortRole(subSystemPrompt);
+  // Per-parent fan-out counter. Each delegate-tool instance belongs to one
+  // agent (the parent at `depth`), so this closure tracks how many
+  // children that specific agent has spawned. The cap value is read from
+  // state so configuration flows through one place.
+  let ownChildCount = 0;
 
+  return tool(
+    async ({ role, systemPrompt: subSystemPrompt, prompt }) => {
+      // requireRole policy — reject custom systemPrompts entirely.
+      if (
+        requireRole &&
+        (!role || !(SUB_AGENT_ROLES as string[]).includes(role))
+      ) {
+        log?.(
+          "warn",
+          `${indent}✗ delegation refused · requireRole=true, no valid role given`,
+        );
+        return `Delegation refused: this project requires every call_agent invocation to pass one of the predefined roles: ${SUB_AGENT_ROLES.join(", ")}. Custom systemPrompts are not allowed. Pick the role that best fits the subtask and re-call.`;
+      }
+
+      const resolved = resolveSubAgentSystemPrompt({
+        role,
+        systemPrompt: subSystemPrompt,
+      });
+      const displayRole =
+        resolved.resolvedRole === "custom"
+          ? shortRole(resolved.systemPrompt)
+          : resolved.resolvedRole;
+
+      // Global hard cap — runaway-loop rail.
       if (state.callCount >= state.maxCalls) {
         log?.(
           "warn",
-          `${indent}✗ delegation refused · call budget ${state.maxCalls} exhausted · role="${role}"`,
+          `${indent}✗ delegation refused · hard cap ${state.maxCalls} reached · role="${displayRole}"`,
         );
-        return `Delegation refused: sub-agent call budget (${state.maxCalls}) exhausted for this request. Solve this subtask yourself.`;
+        return `Delegation refused: hard sub-agent call ceiling (${state.maxCalls}) reached for this request. The task was likely over-decomposed — synthesize what you have and solve the rest directly.`;
       }
+
+      // Per-parent fan-out cap.
+      if (
+        typeof state.maxCallsPerAgent === "number" &&
+        ownChildCount >= state.maxCallsPerAgent
+      ) {
+        log?.(
+          "warn",
+          `${indent}✗ delegation refused · per-parent cap ${state.maxCallsPerAgent} reached at depth ${depth} · role="${displayRole}"`,
+        );
+        return `Delegation refused: this agent has already spawned ${state.maxCallsPerAgent} sub-agents (its per-parent fan-out cap). Synthesize the results you have, then either solve the rest directly or run a second wave from a higher-level plan.`;
+      }
+
+      // Per-depth fan-out cap. The cap applies to the CHILD's depth.
+      const childDepth = depth + 1;
+      const perDepthCap = state.maxCallsAtDepth?.[childDepth];
+      const usedAtDepth = state.callsAtDepth[childDepth] ?? 0;
+      if (typeof perDepthCap === "number" && usedAtDepth >= perDepthCap) {
+        log?.(
+          "warn",
+          `${indent}✗ delegation refused · depth-${childDepth} cap ${perDepthCap} reached · role="${displayRole}"`,
+        );
+        return `Delegation refused: the per-depth cap for depth ${childDepth} (${perDepthCap}) is already used up across all branches in this run. Either solve this subtask directly or wait for an earlier sibling to free budget by finishing (it won't — caps are run-scoped, not concurrent).`;
+      }
+
+      // All checks passed — increment counters and spawn.
       state.callCount++;
+      ownChildCount++;
+      state.callsAtDepth[childDepth] = usedAtDepth + 1;
       const callIndex = state.callCount;
 
-      const childDepth = depth + 1;
       const childCanDelegate = childDepth < state.maxDepth;
       log?.(
         "info",
-        `${indent}↳ spawn sub-agent #${callIndex} · depth ${childDepth}/${state.maxDepth} · role="${role}" · task="${truncate(prompt)}"`,
+        `${indent}↳ spawn sub-agent #${callIndex} · depth ${childDepth}/${state.maxDepth} · role="${displayRole}" · task="${truncate(prompt)}"`,
       );
       const subAgent = buildAgent({
-        systemPrompt: subAgentPrompt(subSystemPrompt, childCanDelegate),
+        systemPrompt: subAgentPrompt(
+          resolved.systemPrompt,
+          childCanDelegate,
+          softCap,
+        ),
         log,
         depth: childDepth,
         state,
@@ -76,6 +152,10 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
         approver,
         abortSignal,
         onModelUsage,
+        softCap,
+        modelName: subAgentModel,
+        subAgentModel,
+        requireRole,
       });
       const result = await subAgent.invoke(
         { messages: [new HumanMessage(prompt)] },
@@ -84,24 +164,33 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
       const text = extractText(result.messages.at(-1)) || "";
       log?.(
         "info",
-        `${indent}✓ sub-agent #${callIndex} done · role="${role}" · ${text.length} chars returned`,
+        `${indent}✓ sub-agent #${callIndex} done · role="${displayRole}" · ${text.length} chars returned`,
       );
       return text;
     },
     {
       name: "call_agent",
       description:
-        "Delegate a subtask to a sub-agent. You assign the sub-agent a role via its systemPrompt, and give it a self-contained task via prompt. Returns the sub-agent's final reply as a string.",
+        `Delegate a focused subtask to a leaf specialist sub-agent. Returns the sub-agent's final compact report as a string. ` +
+        `You assign the role either by passing one of the predefined role names (${SUB_AGENT_ROLES.map((r) => `'${r}'`).join(", ")}) in 'role', OR by writing a custom 'systemPrompt'. ` +
+        `The sub-agent does not see this conversation, so 'prompt' must be self-contained: state the scope, what to produce, and what NOT to touch.`,
       schema: z.object({
+        role: z
+          .enum(SUB_AGENT_ROLES as [string, ...string[]])
+          .optional()
+          .describe(
+            `One of the predefined roles: ${SUB_AGENT_ROLES.join(", ")}. Each role has a pre-baked system prompt with scope rules and a structured return format. Prefer this over writing a custom systemPrompt unless none fits.`,
+          ),
         systemPrompt: z
           .string()
+          .optional()
           .describe(
-            "The role/persona system prompt to assign to the sub-agent. Should be specific to the subtask (e.g. 'You are a research analyst focused on climate policy').",
+            "Custom role/persona prompt for the sub-agent. Use this only when no predefined role fits. Ignored if 'role' is provided.",
           ),
         prompt: z
           .string()
           .describe(
-            "The self-contained task for the sub-agent. Include any context the sub-agent needs since it cannot see this conversation. Scope it narrowly: state exactly what to produce and what NOT to cover (so the sub-agent does not drift into adjacent topics).",
+            "The self-contained task for the sub-agent. Include any context the sub-agent needs since it cannot see this conversation. State the scope explicitly (e.g. 'you may only touch files under src/api/tools/') and what NOT to cover so the sub-agent does not drift.",
           ),
       }),
     },

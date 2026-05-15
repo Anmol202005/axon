@@ -46,6 +46,14 @@ import {
   getActiveConfig,
   setActiveConfig,
 } from "./config.js";
+import {
+  architectureDefaults,
+  architectureFile,
+  formatArchitecture,
+  loadArchitecture,
+  writeDefaultArchitectureFile,
+  type ArchitectureConfig,
+} from "./architecture.js";
 import { Onboarding } from "./Onboarding.js";
 import {
   formatCommandList,
@@ -359,6 +367,27 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
     },
     [root],
   );
+
+  // Per-project agent architecture (.axon/architecture.json). Falls back
+  // to defaults silently when the file is missing; surfaces a warning in
+  // the activity line when present-but-malformed. The ref is what handleSubmit
+  // reads when building the runAgent call so it always sees the latest value.
+  const architectureRef = useRef<ArchitectureConfig>(architectureDefaults());
+  const [architecture, setArchitecture] = useState<ArchitectureConfig>(
+    architectureDefaults(),
+  );
+  const [architectureFileExists, setArchitectureFileExists] = useState(false);
+  const reloadArchitecture = useCallback(async () => {
+    const loaded = await loadArchitecture(root);
+    architectureRef.current = loaded.config;
+    setArchitecture(loaded.config);
+    setArchitectureFileExists(loaded.fileExists);
+    if (loaded.warning) setActivity(loaded.warning);
+    return loaded;
+  }, [root]);
+  useEffect(() => {
+    void reloadArchitecture();
+  }, [reloadArchitecture]);
 
   // Live token/cost meter. We keep two scopes: a per-turn counter that
   // updates as model calls stream in, and a session total accumulated
@@ -805,6 +834,53 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           setSetupMode(true);
           return;
         }
+        if (cmd === "architecture" || cmd === "arch") {
+          const sub = rest[0]?.toLowerCase();
+          if (!sub || sub === "show" || sub === "list") {
+            append(
+              "system",
+              formatArchitecture(
+                architectureRef.current,
+                root,
+                architectureFileExists,
+              ),
+            );
+            return;
+          }
+          if (sub === "reload" || sub === "refresh") {
+            const loaded = await reloadArchitecture();
+            append(
+              "system",
+              `reloaded architecture from ${loaded.fileExists ? architectureFile(root) : "defaults"}.\n\n${formatArchitecture(loaded.config, root, loaded.fileExists)}`,
+            );
+            return;
+          }
+          if (sub === "init" || sub === "create") {
+            try {
+              const file = await writeDefaultArchitectureFile(root);
+              await reloadArchitecture();
+              append(
+                "system",
+                `wrote starter architecture file at ${file}. Edit it and run /architecture reload to apply.`,
+              );
+            } catch (err) {
+              append(
+                "system",
+                `could not write architecture file: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+            return;
+          }
+          if (sub === "path" || sub === "file") {
+            append("system", architectureFile(root));
+            return;
+          }
+          append(
+            "system",
+            "usage: /architecture [show | init | reload | path]\n  show    print the active architecture (default)\n  init    write a starter .axon/architecture.json you can edit\n  reload  re-read the file after editing\n  path    print the file path",
+          );
+          return;
+        }
         if (cmd === "export") {
           const fmt = parseFormat(rest[0]);
           if (!fmt) {
@@ -866,7 +942,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
               : "";
           append(
             "system",
-            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /config            show current provider / model / keys location\n  /setup             re-run BYOK onboarding inline (no restart)\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /config            show current provider / model / keys location\n  /setup             re-run BYOK onboarding inline (no restart)\n  /architecture      show / init / reload the per-project agent architecture\n     /architecture init     write a starter .axon/architecture.json\n     /architecture reload   re-read the file after editing\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
               customBlock,
           );
           return;
@@ -978,11 +1054,19 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
 
       let cancelled = false;
       try {
+        const arch = architectureRef.current;
         const result = await runAgent({
           messages: history,
           planMode: planModeRef.current,
           onToolApprovalRequest,
           signal: controller.signal,
+          maxDepth: arch.maxDepth,
+          softCap: arch.softCap,
+          maxCalls: arch.hardCap,
+          maxCallsPerAgent: arch.maxCallsPerAgent,
+          maxCallsAtDepth: arch.maxCallsAtDepth,
+          subAgentModel: arch.subAgentModel,
+          requireRole: arch.requireRole,
           onEvent: (ev) => {
             if (ev.type === "token") {
               liveTextRef.current += ev.content;

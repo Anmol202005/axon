@@ -81,12 +81,52 @@ export type Logger = (level: LogLevel, msg: string) => void;
 
 export interface AgentRunState {
   callCount: number;
+  // Hard ceiling — the runaway-loop rail enforced in code. Default 25.
+  // Never surfaced to the model; it shouldn't plan for it.
   maxCalls: number;
+  // Maximum delegation depth. Default 1 — orchestrator → leaf specialists,
+  // no further nesting. Sub-agents at the leaf cannot call `call_agent`.
   maxDepth: number;
+  // Running count of sub-agent spawns at each depth (key = child depth).
+  // Read by the delegate tool to enforce per-depth caps when configured.
+  callsAtDepth: Record<number, number>;
+  // Optional per-depth caps. Keys are child-depth integers; when a key is
+  // present and the matching count has reached it, further spawns at that
+  // depth are refused. Sourced from .axon/architecture.json.
+  maxCallsAtDepth?: Record<number, number>;
+  // Optional per-parent fan-out cap — each individual agent can spawn at
+  // most this many sub-agents. Enforced via a closure-local counter in
+  // each delegate tool instance; this field is kept on state so the cap
+  // value flows everywhere alongside the rest of the architecture knobs.
+  maxCallsPerAgent?: number;
 }
 
-export function newRunState(maxCalls = 10, maxDepth = 3): AgentRunState {
-  return { callCount: 0, maxCalls, maxDepth };
+// Default architecture:
+//   - maxDepth = 1 (orchestrator delegates to leaves; no recursion)
+//   - softCap  = 10 (advisory budget surfaced in the orchestrator prompt)
+//   - maxCalls = 25 (silent hard ceiling — runaway-loop rail)
+// Users override these via RunAgentOptions when they want a different shape
+// (deeper trees, larger budgets, custom soft caps, etc.).
+export const DEFAULT_MAX_DEPTH = 1;
+export const DEFAULT_SOFT_CAP = 10;
+export const DEFAULT_HARD_CAP = 25;
+
+export function newRunState(
+  maxCalls = DEFAULT_HARD_CAP,
+  maxDepth = DEFAULT_MAX_DEPTH,
+  extra?: {
+    maxCallsAtDepth?: Record<number, number>;
+    maxCallsPerAgent?: number;
+  },
+): AgentRunState {
+  return {
+    callCount: 0,
+    maxCalls,
+    maxDepth,
+    callsAtDepth: {},
+    maxCallsAtDepth: extra?.maxCallsAtDepth,
+    maxCallsPerAgent: extra?.maxCallsPerAgent,
+  };
 }
 
 export function nowTimestamp(): string {
