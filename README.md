@@ -12,6 +12,13 @@
 
 **A multi-agent CLI coding agent. One orchestrator plans. Specialists execute.**
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/axon-cli">
+    <img src="https://img.shields.io/npm/v/axon-cli?color=black&label=npm" />
+  </a>
+  <img src="https://img.shields.io/badge/license-ISC-black" />
+</p>
+
 Run it in your terminal. It reads your codebase, makes real changes to real files, and handles hard tasks by delegating to focused sub-agents — a researcher, an implementer, a reviewer, a tester — all coordinated by a single orchestrator that plans and synthesizes.
 
 ```bash
