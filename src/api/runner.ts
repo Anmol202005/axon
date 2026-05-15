@@ -14,6 +14,7 @@ import {
   makeLogEntry,
   newRunState,
 } from "./types.js";
+import type { RoleMap } from "./prompts.js";
 import {
   extractText,
   lastUserInput,
@@ -61,6 +62,10 @@ export interface RunAgentOptions {
   subAgentModel?: string;
   // When true, `call_agent` rejects calls without a predefined `role`.
   requireRole?: boolean;
+  // Active role registry — typically the built-ins merged with whatever
+  // the CLI loaded from .axon/roles/*.md. When omitted, defaults to just
+  // the built-ins.
+  roles?: RoleMap;
   // MCP configuration. Defaults + user-config file (.forge/mcp.json) are
   // always merged in unless explicitly disabled.
   mcp?: {
@@ -108,6 +113,7 @@ export async function runAgent(
     maxCallsAtDepth,
     subAgentModel,
     requireRole,
+    roles,
     mcp,
     summarize,
     planMode,
@@ -193,6 +199,7 @@ export async function runAgent(
         planMode,
         softCap,
         maxDepth,
+        roles,
       }),
       log,
       depth: 0,
@@ -206,6 +213,7 @@ export async function runAgent(
       softCap,
       subAgentModel,
       requireRole,
+      roles,
       // Stream tokens from the orchestrator's model only. Sub-agents build a
       // separate model without these callbacks, so their output stays out of
       // the UI's live area.

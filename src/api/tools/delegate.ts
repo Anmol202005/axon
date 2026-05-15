@@ -10,11 +10,12 @@ import type {
 import { DEFAULT_SOFT_CAP } from "../types.js";
 import { extractText } from "../messages.js";
 import {
+  defaultRoleMap,
   resolveSubAgentSystemPrompt,
   shortRole,
   subAgentPrompt,
-  SUB_AGENT_ROLES,
   truncate,
+  type RoleMap,
 } from "../prompts.js";
 import { buildAgent } from "../builder.js";
 
@@ -40,9 +41,13 @@ export interface CallAgentToolOptions {
   // Model name override for sub-agents this tool spawns. When set,
   // sub-agents are built with this model instead of the orchestrator's.
   subAgentModel?: string;
-  // When true, calls that don't pass one of the predefined `role` values
-  // are rejected — the orchestrator must use a predefined role.
+  // When true, calls that don't pass one of the role names from `roles`
+  // are rejected — the orchestrator must use a known role.
   requireRole?: boolean;
+  // Active role registry (built-ins + custom roles from .axon/roles/).
+  // Defines the schema enum for `call_agent({role: ...})` and the prompt
+  // looked up when resolving a role name.
+  roles?: RoleMap;
 }
 
 export function createCallAgentTool(opts: CallAgentToolOptions) {
@@ -61,7 +66,13 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
     softCap = DEFAULT_SOFT_CAP,
     subAgentModel,
     requireRole = false,
+    roles = defaultRoleMap(),
   } = opts;
+
+  // Snapshot the role-name list at tool-build time. The Zod enum is
+  // immutable once constructed; a later /roles reload won't update an
+  // in-flight tool, only future agent invocations.
+  const roleNames = Array.from(roles.keys());
 
   // Per-parent fan-out counter. Each delegate-tool instance belongs to one
   // agent (the parent at `depth`), so this closure tracks how many
@@ -69,23 +80,39 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
   // state so configuration flows through one place.
   let ownChildCount = 0;
 
+  // Build the role schema. If there are NO roles registered (shouldn't
+  // normally happen — built-ins always seed the map), fall back to a
+  // plain string so we don't crash z.enum on an empty list.
+  const roleSchema =
+    roleNames.length > 0
+      ? z
+          .enum(roleNames as [string, ...string[]])
+          .optional()
+          .describe(
+            `One of the registered roles: ${roleNames.join(", ")}. Each role has a system prompt with scope rules and a structured return format. Prefer this over writing a custom systemPrompt unless none fits.`,
+          )
+      : z
+          .string()
+          .optional()
+          .describe(
+            "Role name. No roles are registered for this run — pass a systemPrompt instead.",
+          );
+
   return tool(
     async ({ role, systemPrompt: subSystemPrompt, prompt }) => {
       // requireRole policy — reject custom systemPrompts entirely.
-      if (
-        requireRole &&
-        (!role || !(SUB_AGENT_ROLES as string[]).includes(role))
-      ) {
+      if (requireRole && (!role || !roles.has(role))) {
         log?.(
           "warn",
           `${indent}✗ delegation refused · requireRole=true, no valid role given`,
         );
-        return `Delegation refused: this project requires every call_agent invocation to pass one of the predefined roles: ${SUB_AGENT_ROLES.join(", ")}. Custom systemPrompts are not allowed. Pick the role that best fits the subtask and re-call.`;
+        return `Delegation refused: this project requires every call_agent invocation to pass one of the registered roles: ${roleNames.join(", ")}. Custom systemPrompts are not allowed. Pick the role that best fits the subtask and re-call.`;
       }
 
       const resolved = resolveSubAgentSystemPrompt({
         role,
         systemPrompt: subSystemPrompt,
+        roles,
       });
       const displayRole =
         resolved.resolvedRole === "custom"
@@ -141,6 +168,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
           resolved.systemPrompt,
           childCanDelegate,
           softCap,
+          roles,
         ),
         log,
         depth: childDepth,
@@ -156,6 +184,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
         modelName: subAgentModel,
         subAgentModel,
         requireRole,
+        roles,
       });
       const result = await subAgent.invoke(
         { messages: [new HumanMessage(prompt)] },
@@ -172,20 +201,15 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
       name: "call_agent",
       description:
         `Delegate a focused subtask to a leaf specialist sub-agent. Returns the sub-agent's final compact report as a string. ` +
-        `You assign the role either by passing one of the predefined role names (${SUB_AGENT_ROLES.map((r) => `'${r}'`).join(", ")}) in 'role', OR by writing a custom 'systemPrompt'. ` +
+        `You assign the role either by passing one of the registered role names${roleNames.length ? ` (${roleNames.map((r) => `'${r}'`).join(", ")})` : ""} in 'role', OR by writing a custom 'systemPrompt'. ` +
         `The sub-agent does not see this conversation, so 'prompt' must be self-contained: state the scope, what to produce, and what NOT to touch.`,
       schema: z.object({
-        role: z
-          .enum(SUB_AGENT_ROLES as [string, ...string[]])
-          .optional()
-          .describe(
-            `One of the predefined roles: ${SUB_AGENT_ROLES.join(", ")}. Each role has a pre-baked system prompt with scope rules and a structured return format. Prefer this over writing a custom systemPrompt unless none fits.`,
-          ),
+        role: roleSchema,
         systemPrompt: z
           .string()
           .optional()
           .describe(
-            "Custom role/persona prompt for the sub-agent. Use this only when no predefined role fits. Ignored if 'role' is provided.",
+            "Custom role/persona prompt for the sub-agent. Use this only when no registered role fits. Ignored if 'role' is provided.",
           ),
         prompt: z
           .string()

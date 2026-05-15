@@ -54,6 +54,14 @@ import {
   writeDefaultArchitectureFile,
   type ArchitectureConfig,
 } from "./architecture.js";
+import {
+  builtinRoleMap,
+  formatRoles,
+  loadRoles,
+  rolesDir,
+  writeBuiltinRoleFiles,
+} from "./roles.js";
+import type { RoleMap } from "../api/agent.js";
 import { Onboarding } from "./Onboarding.js";
 import {
   formatCommandList,
@@ -388,6 +396,27 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   useEffect(() => {
     void reloadArchitecture();
   }, [reloadArchitecture]);
+
+  // Sub-agent role registry. Built-ins are merged with any .md files in
+  // .axon/roles/ (and ~/.axon/roles/ for personal cross-project roles).
+  // Workspace files override personal, which override built-ins. Reloaded
+  // on demand via /roles reload — the new map applies to subsequent
+  // runAgent invocations (in-flight tools have already snapshotted theirs).
+  // Held in a ref only (no React state) because the UI doesn't render
+  // anything off it directly — the slash command and the runAgent caller
+  // read .current.
+  const rolesRef = useRef<RoleMap>(builtinRoleMap());
+  const reloadRoles = useCallback(async () => {
+    const loaded = await loadRoles(root);
+    rolesRef.current = loaded.roles;
+    if (loaded.warnings.length) {
+      setActivity(`roles: ${loaded.warnings[0]}`);
+    }
+    return loaded;
+  }, [root]);
+  useEffect(() => {
+    void reloadRoles();
+  }, [reloadRoles]);
 
   // Live token/cost meter. We keep two scopes: a per-turn counter that
   // updates as model calls stream in, and a session total accumulated
@@ -881,6 +910,88 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           );
           return;
         }
+        if (cmd === "roles" || cmd === "role") {
+          const sub = rest[0]?.toLowerCase();
+          if (!sub || sub === "show" || sub === "list") {
+            append("system", formatRoles(rolesRef.current, root));
+            return;
+          }
+          if (sub === "reload" || sub === "refresh") {
+            const loaded = await reloadRoles();
+            const customLines =
+              loaded.custom.length === 0
+                ? "  (no custom or override role files yet)"
+                : loaded.custom
+                    .map((d) => `  ${d.name}  ←  ${d.source}`)
+                    .join("\n");
+            append(
+              "system",
+              `reloaded ${loaded.roles.size} role(s).\n${customLines}` +
+                (loaded.warnings.length
+                  ? `\nwarnings:\n  ${loaded.warnings.join("\n  ")}`
+                  : ""),
+            );
+            return;
+          }
+          if (sub === "init" || sub === "scaffold") {
+            try {
+              const res = await writeBuiltinRoleFiles(root);
+              await reloadRoles();
+              const w = res.written.length
+                ? `wrote:\n  ${res.written.join("\n  ")}`
+                : "no new files written.";
+              const s = res.skipped.length
+                ? `\nskipped (already exists):\n  ${res.skipped.join("\n  ")}`
+                : "";
+              append(
+                "system",
+                `${w}${s}\n\nedit any of these files and run /roles reload to apply.`,
+              );
+            } catch (err) {
+              append(
+                "system",
+                `could not scaffold role files: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+            return;
+          }
+          if (sub === "show" || sub === "view" || sub === "cat") {
+            const name = rest[1]?.toLowerCase();
+            if (!name) {
+              append("system", "usage: /roles show <name>");
+              return;
+            }
+            const def = rolesRef.current.get(name);
+            if (!def) {
+              append(
+                "system",
+                `unknown role: ${name}. try /roles list to see what's registered.`,
+              );
+              return;
+            }
+            append(
+              "system",
+              `role: ${def.name}  (${def.source === "builtin" ? "builtin" : def.source})\n` +
+                `description: ${def.description}\n` +
+                `\n---\n${def.systemPrompt}\n---`,
+            );
+            return;
+          }
+          if (sub === "path" || sub === "dir") {
+            append("system", rolesDir(root));
+            return;
+          }
+          append(
+            "system",
+            "usage: /roles [list | show <name> | init | reload | path]\n" +
+              "  list           print the registered roles (default)\n" +
+              "  show <name>    print one role's full prompt\n" +
+              "  init           scaffold built-in role prompts into .axon/roles/ for editing\n" +
+              "  reload         re-read .axon/roles/ after editing\n" +
+              "  path           print the .axon/roles/ directory path",
+          );
+          return;
+        }
         if (cmd === "export") {
           const fmt = parseFormat(rest[0]);
           if (!fmt) {
@@ -942,7 +1053,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
               : "";
           append(
             "system",
-            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /config            show current provider / model / keys location\n  /setup             re-run BYOK onboarding inline (no restart)\n  /architecture      show / init / reload the per-project agent architecture\n     /architecture init     write a starter .axon/architecture.json\n     /architecture reload   re-read the file after editing\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /commands          list custom slash commands from .axon/commands/\n  /reload            reload custom commands from disk\n  /config            show current provider / model / keys location\n  /setup             re-run BYOK onboarding inline (no restart)\n  /architecture      show / init / reload the per-project agent architecture\n     /architecture init     write a starter .axon/architecture.json\n     /architecture reload   re-read the file after editing\n  /roles             list / show / init / reload sub-agent roles\n     /roles init           scaffold built-in role prompts into .axon/roles/\n     /roles show <name>    print one role's full prompt\n     /roles reload         re-read .axon/roles/ after editing\n  /export <md|json>  write the session transcript to .axon/exports/\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time" +
               customBlock,
           );
           return;
@@ -1067,6 +1178,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           maxCallsAtDepth: arch.maxCallsAtDepth,
           subAgentModel: arch.subAgentModel,
           requireRole: arch.requireRole,
+          roles: rolesRef.current,
           onEvent: (ev) => {
             if (ev.type === "token") {
               liveTextRef.current += ev.content;

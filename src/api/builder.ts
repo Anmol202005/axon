@@ -7,6 +7,7 @@ import type {
   ToolApprover,
 } from "./types.js";
 import { DEFAULT_SOFT_CAP, newRunState } from "./types.js";
+import type { RoleMap } from "./prompts.js";
 import { buildModel } from "./model.js";
 import { createFileTools } from "./tools/files.js";
 import { createShellTool } from "./tools/shell.js";
@@ -82,6 +83,11 @@ export interface BuildAgentOptions {
   // enforce per-parent / per-depth caps and the role-required policy.
   subAgentModel?: string;
   requireRole?: boolean;
+  // Active role registry — built-ins merged with any user .axon/roles/*.md.
+  // Passed to the delegate tool (schema enum + prompt lookup) and to the
+  // orchestrator prompt (role catalog block). When omitted, defaults to
+  // just the built-ins.
+  roles?: RoleMap;
 }
 
 export function buildAgent(opts: BuildAgentOptions): ReactAgent {
@@ -103,6 +109,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     modelName,
     subAgentModel,
     requireRole,
+    roles,
   } = opts;
 
   const indent = "  ".repeat(depth);
@@ -152,6 +159,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
           softCap,
           subAgentModel,
           requireRole,
+          roles,
         }),
       ]
     : baseTools;

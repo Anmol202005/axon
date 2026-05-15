@@ -5,14 +5,13 @@
 import { DEFAULT_SOFT_CAP } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// Predefined sub-agent roles
+// Sub-agent roles
 // ---------------------------------------------------------------------------
-// The orchestrator can pass one of these role names to `call_agent` instead
-// of writing a full systemPrompt each time. Each role is a leaf specialist
-// with a focused scope and a structured return format. The library is small
-// on purpose — five roles cover most coding-agent decompositions. For
-// anything that doesn't fit, the orchestrator can still pass a custom
-// systemPrompt.
+// The orchestrator can pass a role name to `call_agent` instead of writing a
+// full systemPrompt each time. Five roles are baked in below; the runtime
+// merges user-supplied roles from .axon/roles/*.md on top of these (handled
+// in src/cli/roles.ts). All downstream code consumes a `RoleMap` rather
+// than the static built-ins so custom roles flow everywhere.
 
 export type SubAgentRole =
   | "researcher"
@@ -29,7 +28,24 @@ export const SUB_AGENT_ROLES: SubAgentRole[] = [
   "debugger",
 ];
 
-const SUB_AGENT_ROLE_PROMPTS: Record<SubAgentRole, string> = {
+// Alias kept under a non-`SUB_AGENT_*` name so the role-loader's intent is
+// clearer at the import site.
+export const BUILTIN_ROLE_NAMES: SubAgentRole[] = SUB_AGENT_ROLES;
+
+export const BUILTIN_ROLE_DESCRIPTIONS: Record<SubAgentRole, string> = {
+  researcher:
+    "Read-only exploration. Reports findings with file:line refs. No writes.",
+  implementer:
+    "Writes code for a specific scope. Reads before writing; runs targeted checks.",
+  reviewer:
+    "Read-only critique. Issues tagged by severity (blocker / nit / question).",
+  tester:
+    "Writes / runs tests in the project's existing framework. Reports pass/fail.",
+  debugger:
+    "Investigates a specific failure. Reproduces, traces, recommends a fix.",
+};
+
+export const BUILTIN_ROLE_PROMPTS: Record<SubAgentRole, string> = {
   researcher: `You are a RESEARCHER specialist. You explore the codebase, gather context, and report findings.
 
 Rules:
@@ -93,22 +109,56 @@ Return format (compact, ≤25 lines, no narration):
 - Confidence: high / medium / low.`,
 };
 
+// ---------------------------------------------------------------------------
+// RoleDefinition / RoleMap — runtime registry of available roles. The
+// built-ins are merged with user files at the CLI layer (src/cli/roles.ts)
+// before the agent runs.
+// ---------------------------------------------------------------------------
+
+export interface RoleDefinition {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  // "builtin" for the hardcoded set, or the absolute path of the .md file
+  // the override / custom role was loaded from.
+  source: "builtin" | string;
+}
+
+export type RoleMap = Map<string, RoleDefinition>;
+
+// Default role map — just the built-ins. Used when callers don't pass a
+// custom map (e.g. tests, programmatic embedding). The CLI always passes a
+// merged map that may include user roles.
+export function defaultRoleMap(): RoleMap {
+  const map: RoleMap = new Map();
+  for (const name of BUILTIN_ROLE_NAMES) {
+    map.set(name, {
+      name,
+      description: BUILTIN_ROLE_DESCRIPTIONS[name],
+      systemPrompt: BUILTIN_ROLE_PROMPTS[name],
+      source: "builtin",
+    });
+  }
+  return map;
+}
+
 export function getSubAgentRolePrompt(role: SubAgentRole): string {
-  return SUB_AGENT_ROLE_PROMPTS[role];
+  return BUILTIN_ROLE_PROMPTS[role];
 }
 
 // Resolves the systemPrompt for a sub-agent. If a known role is provided,
-// use its pre-baked prompt. Otherwise fall back to the caller-supplied
-// systemPrompt, or a generic specialist prompt if neither is given.
+// use its prompt from the role map. Otherwise fall back to the caller-
+// supplied systemPrompt, or a generic specialist prompt if neither is
+// given.
 export function resolveSubAgentSystemPrompt(opts: {
   role?: string;
   systemPrompt?: string;
-}): { systemPrompt: string; resolvedRole: SubAgentRole | "custom" } {
-  if (opts.role && (SUB_AGENT_ROLES as string[]).includes(opts.role)) {
-    return {
-      systemPrompt: SUB_AGENT_ROLE_PROMPTS[opts.role as SubAgentRole],
-      resolvedRole: opts.role as SubAgentRole,
-    };
+  roles?: RoleMap;
+}): { systemPrompt: string; resolvedRole: string } {
+  const roleMap = opts.roles ?? defaultRoleMap();
+  if (opts.role && roleMap.has(opts.role)) {
+    const def = roleMap.get(opts.role)!;
+    return { systemPrompt: def.systemPrompt, resolvedRole: opts.role };
   }
   const fallback =
     opts.systemPrompt?.trim() ||
@@ -116,11 +166,13 @@ export function resolveSubAgentSystemPrompt(opts: {
   return { systemPrompt: fallback, resolvedRole: "custom" };
 }
 
-function rolesCatalogBlock(): string {
-  const lines = SUB_AGENT_ROLES.map((r) => `- \`${r}\``);
+function rolesCatalogBlock(roles: RoleMap): string {
+  const lines = Array.from(roles.values()).map(
+    (r) => `- \`${r.name}\` — ${r.description}`,
+  );
   return `Predefined roles for \`call_agent\` (pass \`role: "<name>"\` instead of writing systemPrompt):
 ${lines.join("\n")}
-Each role has a pre-baked system prompt with scope rules and a structured return format. For anything that doesn't fit, pass a custom \`systemPrompt\` instead.`;
+Each role has a system prompt with scope rules and a structured return format. For anything that doesn't fit a role, pass a custom \`systemPrompt\` instead.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +191,10 @@ Stay strictly in scope:
 // Default flow: evaluate → plan → fan-out → synthesize → optional second wave.
 // `softCap` is an advisory budget signal surfaced to the model; it's not
 // enforced (a separate hard ceiling in code prevents runaway loops).
-function evaluationGuidance(softCap: number = DEFAULT_SOFT_CAP): string {
+function evaluationGuidance(
+  softCap: number = DEFAULT_SOFT_CAP,
+  roles: RoleMap = defaultRoleMap(),
+): string {
   return `## Delegation strategy (the default architecture)
 
 You are a planner and synthesizer. You orchestrate specialists — you do not dive into every detail yourself.
@@ -166,7 +221,7 @@ You are a planner and synthesizer. You orchestrate specialists — you do not di
 - Demand the **return format** from the sub-agent's role (compact, structured, ≤25 lines).
 - For independent slices, scope them so **no two sub-agents write the same file** in the same wave. Concurrent edits to overlapping files cause conflicts since sub-agents share the filesystem but not each other's state.
 
-### ${rolesCatalogBlock()}
+### ${rolesCatalogBlock(roles)}
 
 ### What NOT to do
 
@@ -198,6 +253,10 @@ export interface OrchestratorPromptOptions {
   // Maximum delegation depth. Default 1. Surfaced so the planner knows
   // whether sub-agents can subcontract or not.
   maxDepth?: number;
+  // Active role registry (built-ins merged with user-defined roles from
+  // .axon/roles/). Renders into the role-catalog section so the orchestrator
+  // knows which roles it can pass to `call_agent`.
+  roles?: RoleMap;
 }
 
 export function orchestratorPrompt(
@@ -206,6 +265,7 @@ export function orchestratorPrompt(
   const today = new Date().toISOString().slice(0, 10);
   const softCap = opts.softCap ?? DEFAULT_SOFT_CAP;
   const maxDepth = opts.maxDepth ?? 1;
+  const roles = opts.roles ?? defaultRoleMap();
   const memoryBlock = opts.projectMemory?.trim()
     ? `\n\n## Project memory (AXON.md)\nThe project ships an AXON.md with persistent notes from the user. Treat it as standing instructions for this codebase and follow it unless the current request explicitly overrides.\n\n<project_memory>\n${opts.projectMemory.trim()}\n</project_memory>`
     : "";
@@ -255,7 +315,7 @@ export function orchestratorPrompt(
 ## Depth
 ${depthNote}
 
-${evaluationGuidance(softCap)}${projectBlock}${memoryBlock}${planBlock}
+${evaluationGuidance(softCap, roles)}${projectBlock}${memoryBlock}${planBlock}
 
 Today's date is ${today}.`;
 }
@@ -264,12 +324,13 @@ export function subAgentPrompt(
   role: string,
   canDelegate: boolean,
   softCap: number = DEFAULT_SOFT_CAP,
+  roles: RoleMap = defaultRoleMap(),
 ): string {
   return `${role}
 
 You were spawned by an orchestrator to handle one specific subtask. Address ONLY the task in the user message — do not expand scope, pre-empt related concerns, or answer questions you weren't asked. Return just the deliverable the orchestrator needs.
 
-${canDelegate ? evaluationGuidance(softCap) : leafGuidance()}`;
+${canDelegate ? evaluationGuidance(softCap, roles) : leafGuidance()}`;
 }
 
 export function shortRole(role: string): string {
