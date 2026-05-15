@@ -5,6 +5,7 @@ import type {
   ToolApprovalRequest,
 } from "../api/types.js";
 import { MultilineInput } from "./MultilineInput.js";
+import { Theme } from "./theme.js";
 
 // ===========================================================================
 // ToolApproval — captures the user's decision for a pending tool call.
@@ -122,14 +123,14 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
       <Box>
         {isPlanExit ? (
           <>
-            <Text color="magenta" bold>{"◆ "}</Text>
+            <Text bold>{"◆ "}</Text>
             <Text bold>{"axon has a plan to propose"}</Text>
           </>
         ) : (
           <>
-            <Text color="yellow" bold>{"⚠ "}</Text>
+            <Text color={Theme.warn} bold>{"⚠ "}</Text>
             <Text bold>{"axon wants to run "}</Text>
-            <Text color="cyan" bold>{request.toolName}</Text>
+            <Text bold>{request.toolName}</Text>
           </>
         )}
       </Box>
@@ -138,7 +139,7 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
           marginTop={1}
           paddingX={1}
           borderStyle="round"
-          borderColor="magenta"
+          borderColor={Theme.border}
           flexDirection="column"
         >
           <Text>{plan.trim() || "(empty plan)"}</Text>
@@ -163,7 +164,7 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
               const active = i === selected;
               return (
                 <Box key={i}>
-                  <Text color={active ? "cyan" : undefined} bold={active}>
+                  <Text bold={active} dimColor={!active}>
                     {active ? "❯ " : "  "}
                     {i + 1}. {opt}
                   </Text>
@@ -181,8 +182,8 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
             <Box marginBottom={1}>
               <Text>Tell axon what to do differently:</Text>
             </Box>
-            <Box borderStyle="round" borderColor="cyan" paddingX={1}>
-              <Text color="cyan" bold>{"› "}</Text>
+            <Box borderStyle="round" borderColor={Theme.border} paddingX={1}>
+              <Text bold>{"› "}</Text>
               <Box flexGrow={1}>
                 <MultilineInput
                   value={feedback}

@@ -1,6 +1,7 @@
 import React from "react";
 import os from "node:os";
 import { Box, Text } from "ink";
+import { Theme } from "./theme.js";
 
 // ===========================================================================
 // Logo + welcome banner shown once at startup
@@ -15,16 +16,6 @@ const LOGO = [
   "╚═╝  ╚═╝╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═══╝",
 ];
 
-// Gentle cyan → lavender gradient down the rows
-const LOGO_COLORS = [
-  "#5ff7ff",
-  "#5fd7ff",
-  "#5fafff",
-  "#5f87ff",
-  "#af87ff",
-  "#d787ff",
-];
-
 function prettyPath(p: string): string {
   const home = os.homedir();
   return p.startsWith(home) ? "~" + p.slice(home.length) : p;
@@ -34,7 +25,7 @@ export function Logo() {
   return (
     <Box flexDirection="column">
       {LOGO.map((line, i) => (
-        <Text key={i} color={LOGO_COLORS[i]} bold>
+        <Text key={i} bold>
           {line}
         </Text>
       ))}
@@ -49,24 +40,24 @@ export function Welcome() {
     <Box flexDirection="column" marginBottom={1}>
       <Logo />
       <Box marginTop={1} marginBottom={1}>
-        <Text color="gray">a terminal coding agent — type </Text>
-        <Text color="cyan">/help</Text>
-        <Text color="gray"> for commands</Text>
+        <Text color={Theme.muted}>a terminal coding agent — type </Text>
+        <Text bold>/help</Text>
+        <Text color={Theme.muted}> for commands</Text>
       </Box>
       <Box flexDirection="column">
         <Box>
-          <Text color="cyan">◆ </Text>
-          <Text color="gray">workspace  </Text>
+          <Text dimColor>◇ </Text>
+          <Text color={Theme.muted}>workspace  </Text>
           <Text>{cwd}</Text>
         </Box>
         <Box>
-          <Text color="cyan">◆ </Text>
-          <Text color="gray">model      </Text>
+          <Text dimColor>◇ </Text>
+          <Text color={Theme.muted}>model      </Text>
           <Text>{model}</Text>
         </Box>
         <Box>
-          <Text color="cyan">◆ </Text>
-          <Text color="gray">shortcuts  </Text>
+          <Text dimColor>◇ </Text>
+          <Text color={Theme.muted}>shortcuts  </Text>
           <Text dimColor>↵ send · ctrl-c quit</Text>
         </Box>
       </Box>

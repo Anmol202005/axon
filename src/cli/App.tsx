@@ -53,6 +53,7 @@ import {
   type CustomCommand,
 } from "./commands.js";
 import { exportSession, parseFormat } from "./export.js";
+import { Theme } from "./theme.js";
 
 // ===========================================================================
 // axon — terminal chat UI
@@ -101,12 +102,8 @@ function Message({ item }: { item: Item }) {
     return (
       <Box marginBottom={1} flexDirection="column">
         <Box>
-          <Text color="green" bold>
-            ●
-          </Text>
-          <Text color="green" bold>
-            {" axon"}
-          </Text>
+          <Text bold>●</Text>
+          <Text bold>{" axon"}</Text>
         </Box>
         <Box paddingLeft={2}>
           <Text>{rendered}</Text>
@@ -117,9 +114,7 @@ function Message({ item }: { item: Item }) {
   // system
   return (
     <Box marginBottom={1} paddingLeft={2}>
-      <Text color="yellow" dimColor>
-        {item.content}
-      </Text>
+      <Text dimColor>{item.content}</Text>
     </Box>
   );
 }
@@ -142,10 +137,10 @@ function Working({
   return (
     <Box flexDirection="column" marginY={1}>
       <Box>
-        <Text color="cyan">
+        <Text>
           <Spinner type="dots" />
         </Text>
-        <Text color="cyan" bold>
+        <Text bold>
           {"  axon is working…"}
         </Text>
       </Box>
@@ -157,12 +152,8 @@ function Working({
       {liveText ? (
         <Box flexDirection="column" marginTop={1}>
           <Box>
-            <Text color="green" bold>
-              ●
-            </Text>
-            <Text color="green" bold>
-              {" axon"}
-            </Text>
+            <Text bold>●</Text>
+            <Text bold>{" axon"}</Text>
             <Text dimColor>  (streaming…)</Text>
           </Box>
           <Box paddingLeft={2}>
@@ -202,21 +193,22 @@ function InputBar({
     knownPricing: boolean;
   };
 }) {
-  const usageColor =
+  const usageColor: string | undefined =
     usage.level === "red"
-      ? "red"
+      ? Theme.error
       : usage.level === "yellow"
-        ? "yellow"
-        : "green";
+        ? Theme.warn
+        : undefined;
+  const usageDim = usage.level === "green";
   return (
     <Box flexDirection="column">
       <Box
         borderStyle="round"
-        borderColor="cyan"
+        borderColor={Theme.border}
         paddingX={1}
         width="100%"
       >
-        <Text color="cyan" bold>
+        <Text bold>
           {"› "}
         </Text>
         <Box flexGrow={1}>
@@ -232,7 +224,7 @@ function InputBar({
       </Box>
       <Box paddingX={1}>
         <Text dimColor>↵ send  ·  \↵ newline  ·  ↓/↑ history  ·  ctrl-c quit  ·  </Text>
-        <Text color={usageColor}>ctx {usage.pct}%</Text>
+        <Text color={usageColor} dimColor={usageDim}>ctx {usage.pct}%</Text>
         <Text dimColor>
           {`  ·  ${formatTokens(meter.sessionInput)}↑ ${formatTokens(meter.sessionOutput)}↓`}
         </Text>
@@ -1081,13 +1073,13 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
         <Box flexDirection="column" marginTop={1}>
           {error && (
             <Box marginBottom={1}>
-              <Text color="red">✗ </Text>
-              <Text color="red">{error}</Text>
+              <Text color={Theme.error}>✗ </Text>
+              <Text color={Theme.error}>{error}</Text>
             </Box>
           )}
           {planMode && (
             <Box marginBottom={1}>
-              <Text color="magenta" bold>
+              <Text bold>
                 ◆ plan mode
               </Text>
               <Text dimColor>
@@ -1097,7 +1089,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           )}
           {alwaysAllowed.length > 0 && (
             <Box marginBottom={1}>
-              <Text color="grey" dimColor>
+              <Text dimColor>
                 always-allowed: {alwaysAllowed.join(", ")} ·
                 {permissions.allowed.length > 0
                   ? ` ${permissions.allowed.length} from project ·`
@@ -1107,7 +1099,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           )}
           {permissions.denied.length > 0 && (
             <Box marginBottom={1}>
-              <Text color="red" dimColor>
+              <Text color={Theme.error} dimColor>
                 project-denied: {permissions.denied.join(", ")} ·
                 /permissions remove &lt;tool&gt; to clear
               </Text>
@@ -1115,7 +1107,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           )}
           {customCommands.length > 0 && (
             <Box marginBottom={1}>
-              <Text color="cyan" dimColor>
+              <Text dimColor>
                 {customCommands.length} custom command{customCommands.length === 1 ? "" : "s"} loaded · /commands to list · /reload to refresh
               </Text>
             </Box>
