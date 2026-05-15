@@ -23,15 +23,15 @@ SECTION 1 — PARITY: match the current market
 [ ] Image / screenshot paste and drag-drop for multimodal prompts.
 [x] Conversation persistence and resume by session id.
 [ ] Session transcript export to markdown or JSON.
-[ ] ripgrep-backed fast workspace search tool with regex and globbing.
+[x] ripgrep-backed fast workspace search tool with regex and globbing.
 [ ] LSP-aware symbol search, go-to-definition, and rename tool.
-[ ] Git tool surface: status, diff, blame, log, commit, branch, checkout.
+[x] Git tool surface: status, diff, blame, log, commit, branch, checkout.
 [ ] GitHub PR / issue integration via the gh CLI.
 [x] Live token-usage and cost meter per turn and per session.
 [x] Context-window % indicator with auto-compaction trigger near the limit.
 [x] Cancel-in-flight with Esc and graceful tool interruption mid-call.
 [ ] Mid-run prompt injection so the user can steer without restarting.
-[ ] Web search and URL fetch tools for live information.
+[x] Web search and URL fetch tools for live information.
 [ ] Plan mode: read-only, produce and approve a plan before any edits.
 [ ] Auto-accept toggle for trusted edits to skip prompts in dev loops.
 [ ] Permission allowlist / denylist persisted per project.
@@ -40,7 +40,7 @@ SECTION 1 — PARITY: match the current market
 [ ] Mid-session model picker to swap between providers and sizes.
 [ ] .ipynb notebook read + cell-level edit support.
 [ ] Custom slash-command registry loaded from disk.
-[ ] Inline build / test / lint error feedback piped back to the agent.
+[x] Inline build / test / lint error feedback piped back to the agent.
 [ ] VS Code and JetBrains extension bridge over local IPC.
 [ ] Cron-scheduled and headless cloud runs for unattended jobs.
 [ ] Theme system with light, dark, and custom palettes.
@@ -71,10 +71,10 @@ Session lifecycle
 [x] Live token-usage and cost meter per turn and per session.
 
 Code-agent capability (table stakes vs Claude Code / Cursor / Aider)
-[ ] ripgrep-backed fast workspace search tool with regex and globbing.
-[ ] Git tool surface: status, diff, blame, log, commit, branch, checkout.
-[ ] Web search and URL fetch tools for live information.
-[ ] Inline build / test / lint error feedback piped back to the agent.
+[x] ripgrep-backed fast workspace search tool with regex and globbing.
+[x] Git tool surface: status, diff, blame, log, commit, branch, checkout.
+[x] Web search and URL fetch tools for live information.
+[x] Inline build / test / lint error feedback piped back to the agent.
 
 Safety & control
 [ ] Plan mode: read-only, produce and approve a plan before any edits.

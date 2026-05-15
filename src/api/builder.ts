@@ -10,6 +10,10 @@ import { newRunState } from "./types.js";
 import { buildModel } from "./model.js";
 import { createFileTools } from "./tools/files.js";
 import { createShellTool } from "./tools/shell.js";
+import { createSearchTool } from "./tools/search.js";
+import { createGitTools } from "./tools/git.js";
+import { createWebTools } from "./tools/web.js";
+import { createChecksTool } from "./tools/checks.js";
 import { createCallAgentTool } from "./tools/delegate.js";
 
 // ===========================================================================
@@ -23,6 +27,11 @@ import { createCallAgentTool } from "./tools/delegate.js";
 const ALWAYS_ALLOWED_TOOLS = new Set<string>([
   "read_file",
   "list_files",
+  "search",
+  "git_status",
+  "git_diff",
+  "git_blame",
+  "git_log",
   "call_agent",
   "summarize_conversation",
 ]);
@@ -74,8 +83,30 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
   const canDelegate = depth < state.maxDepth;
   const fileTools = createFileTools(workspaceRoot, log, onFileChange, indent);
   const shellTool = createShellTool(workspaceRoot, log, indent, abortSignal);
+  const searchToolInstance = createSearchTool(
+    workspaceRoot,
+    log,
+    indent,
+    abortSignal,
+  );
+  const gitTools = createGitTools(workspaceRoot, log, indent, abortSignal);
+  const webTools = createWebTools(log, indent, abortSignal);
+  const checksTool = createChecksTool(
+    workspaceRoot,
+    log,
+    indent,
+    abortSignal,
+  );
 
-  const baseTools = [...fileTools, shellTool, ...extraTools];
+  const baseTools = [
+    ...fileTools,
+    shellTool,
+    searchToolInstance,
+    ...gitTools,
+    ...webTools,
+    checksTool,
+    ...extraTools,
+  ];
   const rawTools = canDelegate
     ? [
         ...baseTools,

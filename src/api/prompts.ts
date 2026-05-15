@@ -54,7 +54,13 @@ export function orchestratorPrompt(
 - \`read_file\` — read an existing file before modifying it.
 - \`list_files\` — list a directory. Use \`.\` for the workspace root.
 - \`delete_file\` — delete a file. Use sparingly.
-- \`run_command\` — run a shell command from the workspace root (e.g. \`npm test\`, \`git status\`, \`rg foo\`). Returns exit code, stdout, and stderr.
+- \`search\` — ripgrep-backed regex search across the workspace with glob filters. Prefer this over \`run_command rg ...\` and over reading files one by one when you need to locate code.
+- \`git_status\`, \`git_diff\`, \`git_blame\`, \`git_log\` — read-only git inspection. Prefer these over the shell equivalents so the user sees a structured trail.
+- \`git_commit\`, \`git_branch\`, \`git_checkout\` — git mutations. Use carefully; only commit when the user asks.
+- \`web_search\` — search the web (Google via serper.dev) and return titled results with snippets plus an instant answer when available. Use when you need live or external information. Requires the \`SERPER_API_KEY\` env var.
+- \`web_fetch\` — fetch a URL and return its text (HTML is stripped). Pair with \`web_search\` to read a specific result.
+- \`run_checks\` — run the project's build / test / lint / typecheck and get parsed file:line:col diagnostics back. Auto-detects the command from package.json, tsconfig, Cargo.toml, go.mod, pyproject.toml, or Makefile. Use this for inner-loop feedback instead of \`run_command\` whenever you can.
+- \`run_command\` — run any shell command from the workspace root. Use this only when no more specific tool fits. Returns exit code, stdout, and stderr.
 - \`summarize_conversation\` — produce a compact recap of the conversation so far. Call this when the conversation has grown long and you want to consolidate prior context (decisions, file changes, open questions) before continuing.
 - \`call_agent\` — delegate a focused subtask to a sub-agent (see decomposition guidance below).
 
