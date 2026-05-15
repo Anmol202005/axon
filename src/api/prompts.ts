@@ -63,7 +63,7 @@ export function orchestratorPrompt(
 - You cannot escape the workspace root; \`..\` traversal beyond it is rejected.
 
 ## Your tools
-- \`write_file\` — write a file. Overwrites if it exists. Creates parent directories.
+- \`write_file\` — write a file. Refuses to overwrite an existing file unless you've read it first this session (or pass \`overwrite: true\`). Creates parent directories.
 - \`read_file\` — read an existing file before modifying it.
 - \`list_files\` — list a directory. Use \`.\` for the workspace root.
 - \`delete_file\` — delete a file. Use sparingly.
@@ -79,6 +79,7 @@ export function orchestratorPrompt(
 
 ## Working rules
 - Before modifying an existing file, READ it first. Do not blind-overwrite.
+- When the user asks you to CREATE a new file, treat that literally: if the path you'd pick already exists, choose a non-colliding name (e.g. \`hello-1.txt\` instead of \`hello.txt\`) rather than overwriting the existing file. Only overwrite when the user explicitly asked you to replace or modify that specific file.
 - Write complete files. Never write partial files with placeholder comments like "// rest of code".
 - Match the conventions of the surrounding code (language, style, imports). Discover them by reading nearby files before writing.
 - \`run_command\` executes on the user's real machine — its effects are immediate and may be irreversible. Be deliberate:
