@@ -30,13 +30,8 @@ import {
   compactThreshold,
   contextUsage,
   estimateMessagesTokens,
-} from "./tokens.js";
-import {
-  computeCost,
-  formatCost,
   formatTokens,
-  priceRate,
-} from "./pricing.js";
+} from "./tokens.js";
 import {
   deleteSession,
   listSessions,
@@ -130,15 +125,11 @@ function Working({
   liveText,
   turnInput,
   turnOutput,
-  turnCost,
-  knownPricing,
 }: {
   activity: string;
   liveText: string;
   turnInput: number;
   turnOutput: number;
-  turnCost: number;
-  knownPricing: boolean;
 }) {
   return (
     <Box flexDirection="column" marginY={1}>
@@ -169,9 +160,6 @@ function Working({
       ) : null}
       <Box paddingLeft={4} marginTop={liveText ? 1 : 0}>
         <Text dimColor>{`esc to cancel · ctrl-c to quit · this turn ${formatTokens(turnInput)}↑ ${formatTokens(turnOutput)}↓`}</Text>
-        {knownPricing && (
-          <Text dimColor>{` · ${formatCost(turnCost)}`}</Text>
-        )}
       </Box>
     </Box>
   );
@@ -195,8 +183,6 @@ function InputBar({
   meter: {
     sessionInput: number;
     sessionOutput: number;
-    sessionCost: number;
-    knownPricing: boolean;
   };
 }) {
   const usageColor: string | undefined =
@@ -234,9 +220,6 @@ function InputBar({
         <Text dimColor>
           {`  ·  ${formatTokens(meter.sessionInput)}↑ ${formatTokens(meter.sessionOutput)}↓`}
         </Text>
-        {meter.knownPricing && (
-          <Text dimColor>{`  ·  ${formatCost(meter.sessionCost)}`}</Text>
-        )}
       </Box>
     </Box>
   );
@@ -386,20 +369,6 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   const [sessionUsage, setSessionUsage] = useState(
     initialSnapshot?.sessionUsage ?? { input: 0, output: 0 },
   );
-  // Snapshot the model at mount so the cost meter has a stable rate for
-  // the session. /setup mid-session does not retroactively re-price prior
-  // turns; new turns under a different model just keep using this rate
-  // until the session ends.
-  const rate = useMemo(() => priceRate(getActiveConfig()?.model), []);
-  const sessionCost = useMemo(
-    () => computeCost(sessionUsage.input, sessionUsage.output, rate),
-    [sessionUsage, rate],
-  );
-  const turnCost = useMemo(
-    () => computeCost(turnUsage.input, turnUsage.output, rate),
-    [turnUsage, rate],
-  );
-
   // AbortController for the in-flight agent run. Esc aborts it.
   const abortRef = useRef<AbortController | null>(null);
 
@@ -1124,8 +1093,6 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           liveText={liveText}
           turnInput={turnUsage.input}
           turnOutput={turnUsage.output}
-          turnCost={turnCost}
-          knownPricing={rate.source !== "unknown"}
         />
       ) : (
         <Box flexDirection="column" marginTop={1}>
@@ -1180,8 +1147,6 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
             meter={{
               sessionInput: sessionUsage.input,
               sessionOutput: sessionUsage.output,
-              sessionCost,
-              knownPricing: rate.source !== "unknown",
             }}
           />
         </Box>

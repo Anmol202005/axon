@@ -56,3 +56,9 @@ export function contextUsage(used: number): ContextUsage {
     pct < 50 ? "green" : pct < 80 ? "yellow" : "red";
   return { used, limit, pct, level };
 }
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
