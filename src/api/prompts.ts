@@ -33,6 +33,9 @@ export interface OrchestratorPromptOptions {
   // <project_memory> block so the model treats it as user-authored context
   // rather than instructions from the system author.
   projectMemory?: string;
+  // When true, the system prompt advertises plan mode rules: read-only
+  // tools only, finish with `exit_plan_mode` to surface a plan for approval.
+  planMode?: boolean;
 }
 
 export function orchestratorPrompt(
@@ -41,6 +44,9 @@ export function orchestratorPrompt(
   const today = new Date().toISOString().slice(0, 10);
   const memoryBlock = opts.projectMemory?.trim()
     ? `\n\n## Project memory (AXON.md)\nThe project ships an AXON.md with persistent notes from the user. Treat it as standing instructions for this codebase and follow it unless the current request explicitly overrides.\n\n<project_memory>\n${opts.projectMemory.trim()}\n</project_memory>`
+    : "";
+  const planBlock = opts.planMode
+    ? `\n\n## Plan mode (ACTIVE)\nYou are currently in PLAN MODE. The user wants to see and approve a plan before any changes are made.\n- Use only read-only tools: \`read_file\`, \`list_files\`, \`search\`, \`git_status\`/\`git_diff\`/\`git_blame\`/\`git_log\`, \`web_search\`, \`web_fetch\`, \`call_agent\`, \`summarize_conversation\`.\n- Do not call \`write_file\`, \`delete_file\`, \`run_command\`, \`run_checks\`, or any git mutation tool — they will be auto-denied while plan mode is active.\n- When you have explored enough to write a concrete plan, call \`exit_plan_mode\` with the plan as markdown. Cover: what you'll change, in which files, in what order, and any tradeoffs.\n- If the user approves, you may proceed with the plan. If they reject with feedback, refine the plan and call \`exit_plan_mode\` again.\n- Do not start editing before \`exit_plan_mode\` succeeds.`
     : "";
   return `You are a senior software engineer working in the user's local project via a CLI coding agent. The user has invoked you from a terminal to make changes to their codebase.
 
@@ -74,7 +80,7 @@ export function orchestratorPrompt(
   - Never chain destructive operations (\`rm -rf\`, \`git push --force\`, \`DROP TABLE\`) without a clear reason from the user.
   - Long-running commands (servers, watchers) will time out — don't start them.
 
-${evaluationGuidance()}${memoryBlock}
+${evaluationGuidance()}${memoryBlock}${planBlock}
 
 Today's date is ${today}.`;
 }

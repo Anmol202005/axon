@@ -23,6 +23,7 @@ export interface CallAgentToolOptions {
   workspaceRoot: string;
   onFileChange: FileChangeFn | undefined;
   extraTools?: unknown[];
+  planMode?: boolean;
   approver?: ToolApprover;
   abortSignal?: AbortSignal;
   onModelUsage?: (usage: { input: number; output: number }) => void;
@@ -37,6 +38,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
     workspaceRoot,
     onFileChange,
     extraTools = [],
+    planMode = false,
     approver,
     abortSignal,
     onModelUsage,
@@ -70,6 +72,7 @@ export function createCallAgentTool(opts: CallAgentToolOptions) {
         workspaceRoot,
         onFileChange,
         extraTools,
+        planMode,
         approver,
         abortSignal,
         onModelUsage,

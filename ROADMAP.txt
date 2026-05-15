@@ -32,9 +32,9 @@ SECTION 1 — PARITY: match the current market
 [x] Cancel-in-flight with Esc and graceful tool interruption mid-call.
 [ ] Mid-run prompt injection so the user can steer without restarting.
 [x] Web search and URL fetch tools for live information.
-[ ] Plan mode: read-only, produce and approve a plan before any edits.
+[x] Plan mode: read-only, produce and approve a plan before any edits.
 [ ] Auto-accept toggle for trusted edits to skip prompts in dev loops.
-[ ] Permission allowlist / denylist persisted per project.
+[x] Permission allowlist / denylist persisted per project.
 [ ] Sandbox mode: containerized or rootless filesystem for risky runs.
 [ ] Pre / post lifecycle hooks (on-start, on-edit, on-stop, on-error).
 [ ] Mid-session model picker to swap between providers and sizes.
@@ -77,8 +77,8 @@ Code-agent capability (table stakes vs Claude Code / Cursor / Aider)
 [x] Inline build / test / lint error feedback piped back to the agent.
 
 Safety & control
-[ ] Plan mode: read-only, produce and approve a plan before any edits.
-[ ] Permission allowlist / denylist persisted per project.
+[x] Plan mode: read-only, produce and approve a plan before any edits.
+[x] Permission allowlist / denylist persisted per project.
 
 Polish (small, but the product feels amateur without them)
 [ ] Auto-detected project type (node/python/rust/go) with tuned defaults.

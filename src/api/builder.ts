@@ -14,6 +14,10 @@ import { createSearchTool } from "./tools/search.js";
 import { createGitTools } from "./tools/git.js";
 import { createWebTools } from "./tools/web.js";
 import { createChecksTool } from "./tools/checks.js";
+import {
+  createExitPlanModeTool,
+  EXIT_PLAN_MODE_TOOL_NAME,
+} from "./tools/plan.js";
 import { createCallAgentTool } from "./tools/delegate.js";
 
 // ===========================================================================
@@ -46,6 +50,11 @@ export interface BuildAgentOptions {
   // Extra tools loaded outside the builder (e.g. MCP). Passed through to
   // sub-agents so the whole tree sees the same tool surface.
   extraTools?: unknown[];
+  // When true, exposes the `exit_plan_mode` tool so the agent can present
+  // a plan for approval. The actual blocking of mutating tools while plan
+  // mode is active is enforced by the approver (the CLI keeps a live ref
+  // and auto-denies anything not on PLAN_MODE_ALLOWED_TOOLS).
+  planMode?: boolean;
   // Optional approver consulted before every gated tool call. Shared with
   // sub-agents so every tool invocation across the tree is gated.
   approver?: ToolApprover;
@@ -72,6 +81,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     workspaceRoot = process.cwd(),
     onFileChange,
     extraTools = [],
+    planMode = false,
     approver,
     abortSignal,
     onModelStart,
@@ -107,6 +117,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
     checksTool,
     ...extraTools,
   ];
+  if (planMode) baseTools.push(createExitPlanModeTool());
   const rawTools = canDelegate
     ? [
         ...baseTools,
@@ -118,6 +129,7 @@ export function buildAgent(opts: BuildAgentOptions): ReactAgent {
           workspaceRoot,
           onFileChange,
           extraTools,
+          planMode,
           approver,
           abortSignal,
           onModelUsage,

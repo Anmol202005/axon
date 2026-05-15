@@ -18,6 +18,10 @@ export interface DecisionMeta {
   // When true, the caller should auto-approve all subsequent calls of the
   // SAME tool for the remainder of the session.
   rememberSession?: boolean;
+  // When true, the caller should persist the "always allow" decision to the
+  // project's .axon/permissions.json so future sessions in this workspace
+  // skip the prompt too.
+  persistProject?: boolean;
 }
 
 interface ToolApprovalProps {
@@ -32,19 +36,39 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
   const [selected, setSelected] = useState(0);
   const [feedback, setFeedback] = useState("");
 
-  const options = [
-    "Allow once",
-    `Always allow \`${request.toolName}\` this session`,
-    "Deny, and tell axon what to do (esc)",
-  ];
+  const isPlanExit = request.toolName === "exit_plan_mode";
+
+  const options = isPlanExit
+    ? [
+        "Approve plan and proceed",
+        "Reject and refine plan (esc)",
+      ]
+    : [
+        "Allow once",
+        `Always allow \`${request.toolName}\` this session`,
+        `Always allow \`${request.toolName}\` in this project`,
+        "Deny, and tell axon what to do (esc)",
+      ];
 
   const pick = useCallback(
     (idx: number) => {
+      if (isPlanExit) {
+        if (idx === 0)
+          onDecide({ kind: "allow_once" });
+        else setMode("feedback");
+        return;
+      }
       if (idx === 0) onDecide({ kind: "allow_once" });
-      else if (idx === 1) onDecide({ kind: "always_allow" });
-      else if (idx === 2) setMode("feedback");
+      else if (idx === 1)
+        onDecide({ kind: "always_allow" }, { rememberSession: true });
+      else if (idx === 2)
+        onDecide(
+          { kind: "always_allow" },
+          { rememberSession: true, persistProject: true },
+        );
+      else if (idx === 3) setMode("feedback");
     },
-    [onDecide],
+    [onDecide, isPlanExit],
   );
 
   // Menu navigation.
@@ -57,10 +81,11 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
       } else if (key.return) {
         pick(selected);
       } else if (key.escape) {
-        pick(2);
+        pick(options.length - 1);
       } else if (input === "1") pick(0);
       else if (input === "2") pick(1);
       else if (input === "3") pick(2);
+      else if (input === "4") pick(3);
     },
     { isActive: mode === "menu" },
   );
@@ -87,22 +112,52 @@ export function DiffApproval({ request, onDecide }: ToolApprovalProps) {
 
   const summary = humanizeToolCall(request.toolName, request.args);
 
+  const plan =
+    isPlanExit && typeof request.args.plan === "string"
+      ? (request.args.plan as string)
+      : "";
+
   return (
     <Box flexDirection="column" marginY={1}>
       <Box>
-        <Text color="yellow" bold>{"⚠ "}</Text>
-        <Text bold>{"axon wants to run "}</Text>
-        <Text color="cyan" bold>{request.toolName}</Text>
+        {isPlanExit ? (
+          <>
+            <Text color="magenta" bold>{"◆ "}</Text>
+            <Text bold>{"axon has a plan to propose"}</Text>
+          </>
+        ) : (
+          <>
+            <Text color="yellow" bold>{"⚠ "}</Text>
+            <Text bold>{"axon wants to run "}</Text>
+            <Text color="cyan" bold>{request.toolName}</Text>
+          </>
+        )}
       </Box>
-      <Box paddingLeft={2}>
-        <Text dimColor>{summary}</Text>
-      </Box>
+      {isPlanExit ? (
+        <Box
+          marginTop={1}
+          paddingX={1}
+          borderStyle="round"
+          borderColor="magenta"
+          flexDirection="column"
+        >
+          <Text>{plan.trim() || "(empty plan)"}</Text>
+        </Box>
+      ) : (
+        <Box paddingLeft={2}>
+          <Text dimColor>{summary}</Text>
+        </Box>
+      )}
 
       <Box marginTop={1}>
         {mode === "menu" ? (
           <Box flexDirection="column">
             <Box marginBottom={1}>
-              <Text>{"Allow this tool call?"}</Text>
+              <Text>
+                {isPlanExit
+                  ? "Approve the plan?"
+                  : "Allow this tool call?"}
+              </Text>
             </Box>
             {options.map((opt, i) => {
               const active = i === selected;
@@ -173,6 +228,8 @@ function humanizeToolCall(
     }
     case "summarize_conversation":
       return "summarize conversation so far";
+    case "exit_plan_mode":
+      return "present plan for approval";
     default: {
       try {
         return truncate(JSON.stringify(args), 120);

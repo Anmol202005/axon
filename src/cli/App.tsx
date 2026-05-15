@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { runAgent, buildModel, summarizeMessages } from "../api/agent.js";
@@ -7,11 +7,25 @@ import type {
   ToolApprovalDecision,
   ToolApprovalRequest,
 } from "../api/agent.js";
+import {
+  EXIT_PLAN_MODE_TOOL_NAME,
+  PLAN_MODE_ALLOWED_TOOLS,
+} from "../api/agent.js";
 import { Welcome } from "./Logo.js";
 import { MultilineInput } from "./MultilineInput.js";
 import { renderMarkdown } from "./markdown.js";
 import { DiffApproval, type DecisionMeta } from "./DiffApproval.js";
 import { expandMentions } from "./mentions.js";
+import {
+  addAllowed,
+  addDenied,
+  emptyPermissions,
+  formatPermissions,
+  loadPermissions,
+  removeEntry,
+  savePermissions,
+  type ProjectPermissions,
+} from "./permissions.js";
 import {
   compactThreshold,
   contextUsage,
@@ -283,6 +297,54 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
     initialSnapshot?.summary ?? null,
   );
 
+  // Plan mode — read-only run that ends in an `exit_plan_mode` approval.
+  // The ref is what the approver checks (it can change mid-run when the
+  // user approves a plan); the state is what the UI displays.
+  const planModeRef = useRef(false);
+  const [planMode, setPlanMode] = useState(false);
+
+  // Per-project persisted allow/deny lists. Loaded once on mount; mutated
+  // via the approval menu's "Always allow in this project" option and via
+  // the /permissions slash command. The ref is what the approver reads on
+  // every tool call so it always sees the latest state.
+  const permissionsRef = useRef<ProjectPermissions>(emptyPermissions());
+  const [permissions, setPermissions] = useState<ProjectPermissions>(
+    emptyPermissions(),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const loaded = await loadPermissions(root);
+      if (cancelled) return;
+      permissionsRef.current = loaded;
+      setPermissions(loaded);
+      // Project allow-list seeds the session "always allowed" set so the UI
+      // surfaces it the same way and the approver short-circuits without
+      // reading the file on every call.
+      for (const t of loaded.allowed) alwaysAllowedRef.current.add(t);
+      setAlwaysAllowed((prev) =>
+        Array.from(new Set([...prev, ...loaded.allowed])),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [root]);
+
+  const writePermissions = useCallback(
+    async (next: ProjectPermissions) => {
+      permissionsRef.current = next;
+      setPermissions(next);
+      try {
+        await savePermissions(root, next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setActivity(`could not save permissions: ${msg}`);
+      }
+    },
+    [root],
+  );
+
   // Live token/cost meter. We keep two scopes: a per-turn counter that
   // updates as model calls stream in, and a session total accumulated
   // across turns. Both reset on /clear; turn resets at the start of each
@@ -365,8 +427,35 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
     { isActive: running && !pendingTool },
   );
 
+  const append = useCallback((role: Role, content: string) => {
+    idRef.current += 1;
+    const id = idRef.current;
+    setItems((prev) => [...prev, { id, role, content }]);
+  }, []);
+
   const onToolApprovalRequest = useCallback(
     (req: ToolApprovalRequest): Promise<ToolApprovalDecision> => {
+      // 1. Project deny-list short-circuits everything else — auto-reject
+      //    silently with a stock reason so the agent learns not to retry.
+      if (permissionsRef.current.denied.includes(req.toolName)) {
+        return Promise.resolve<ToolApprovalDecision>({
+          kind: "deny",
+          reason: `${req.toolName} is on the project deny-list (.axon/permissions.json). Use a different approach.`,
+        });
+      }
+      // 2. Plan mode auto-denies anything that mutates the workspace. The
+      //    `exit_plan_mode` tool itself is always allowed through to the
+      //    interactive prompt.
+      if (
+        planModeRef.current &&
+        !PLAN_MODE_ALLOWED_TOOLS.has(req.toolName)
+      ) {
+        return Promise.resolve<ToolApprovalDecision>({
+          kind: "deny",
+          reason: `Plan mode is active — ${req.toolName} cannot be used until you call exit_plan_mode and the user approves the plan.`,
+        });
+      }
+      // 3. Session / project always-allowed bypasses the prompt.
       if (alwaysAllowedRef.current.has(req.toolName)) {
         return Promise.resolve<ToolApprovalDecision>({ kind: "allow_once" });
       }
@@ -379,13 +468,30 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
   );
 
   const handleDecision = useCallback(
-    (decision: ToolApprovalDecision, _meta?: DecisionMeta) => {
-      if (decision.kind === "always_allow" && pendingTool) {
-        const name = pendingTool.toolName;
+    (decision: ToolApprovalDecision, meta?: DecisionMeta) => {
+      const name = pendingTool?.toolName;
+      // Approving an exit_plan_mode call flips plan mode off so subsequent
+      // mutating tools in the same run go through normal approval. We also
+      // surface a marker in the transcript so the user can see the moment
+      // execution started.
+      if (
+        name === EXIT_PLAN_MODE_TOOL_NAME &&
+        decision.kind === "allow_once"
+      ) {
+        planModeRef.current = false;
+        setPlanMode(false);
+        append("system", "── plan approved · plan mode off ──");
+      }
+      if (decision.kind === "always_allow" && name) {
         alwaysAllowedRef.current.add(name);
         setAlwaysAllowed((prev) =>
           prev.includes(name) ? prev : [...prev, name],
         );
+        if (meta?.persistProject) {
+          void writePermissions(
+            addAllowed(permissionsRef.current, name),
+          );
+        }
       }
       const resolve = toolResolverRef.current;
       toolResolverRef.current = null;
@@ -398,14 +504,8 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
           : decision,
       );
     },
-    [pendingTool],
+    [pendingTool, append, writePermissions],
   );
-
-  const append = useCallback((role: Role, content: string) => {
-    idRef.current += 1;
-    const id = idRef.current;
-    setItems((prev) => [...prev, { id, role, content }]);
-  }, []);
 
   // ↓ on the bottom line of the input → previous (older) prompt
   const handleHistoryDown = useCallback(() => {
@@ -555,18 +655,109 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
             return next;
           });
           setError(null);
-          alwaysAllowedRef.current = new Set();
-          setAlwaysAllowed([]);
+          // Reset session-only always-allows but re-seed with the project
+          // permissions so persisted allows still apply.
+          const seeded = new Set<string>(permissionsRef.current.allowed);
+          alwaysAllowedRef.current = seeded;
+          setAlwaysAllowed(Array.from(seeded));
           setSummary(null);
           setSessionUsage({ input: 0, output: 0 });
           setTurnUsage({ input: 0, output: 0 });
           turnUsageRef.current = { input: 0, output: 0 };
+          planModeRef.current = false;
+          setPlanMode(false);
+          return;
+        }
+        if (cmd === "plan") {
+          const sub = rest[0]?.toLowerCase();
+          const turnOn = sub === "on" || sub === "start" || sub === "begin";
+          const turnOff = sub === "off" || sub === "stop" || sub === "end";
+          const next =
+            turnOn ? true : turnOff ? false : !planModeRef.current;
+          planModeRef.current = next;
+          setPlanMode(next);
+          append(
+            "system",
+            next
+              ? "── plan mode on · agent will explore read-only and propose a plan ──"
+              : "── plan mode off ──",
+          );
+          return;
+        }
+        if (cmd === "permissions" || cmd === "perms") {
+          const sub = rest[0]?.toLowerCase();
+          const tool = rest[1];
+          if (!sub || sub === "list" || sub === "show") {
+            append(
+              "system",
+              `project permissions (.axon/permissions.json)\n${formatPermissions(
+                permissionsRef.current,
+              )}`,
+            );
+            return;
+          }
+          if (sub === "allow") {
+            if (!tool) {
+              append("system", "usage: /permissions allow <tool>");
+              return;
+            }
+            await writePermissions(
+              addAllowed(permissionsRef.current, tool),
+            );
+            alwaysAllowedRef.current.add(tool);
+            setAlwaysAllowed((prev) =>
+              prev.includes(tool) ? prev : [...prev, tool],
+            );
+            append("system", `allowed ${tool} for this project.`);
+            return;
+          }
+          if (sub === "deny" || sub === "block") {
+            if (!tool) {
+              append("system", "usage: /permissions deny <tool>");
+              return;
+            }
+            await writePermissions(
+              addDenied(permissionsRef.current, tool),
+            );
+            alwaysAllowedRef.current.delete(tool);
+            setAlwaysAllowed((prev) => prev.filter((t) => t !== tool));
+            append("system", `denied ${tool} for this project.`);
+            return;
+          }
+          if (sub === "remove" || sub === "clear" || sub === "reset") {
+            if (sub === "reset") {
+              await writePermissions(emptyPermissions());
+              const seeded = new Set<string>();
+              alwaysAllowedRef.current = seeded;
+              setAlwaysAllowed([]);
+              append("system", "cleared project permissions.");
+              return;
+            }
+            if (!tool) {
+              append(
+                "system",
+                "usage: /permissions remove <tool>  (or /permissions reset to clear all)",
+              );
+              return;
+            }
+            await writePermissions(
+              removeEntry(permissionsRef.current, tool),
+            );
+            alwaysAllowedRef.current.delete(tool);
+            setAlwaysAllowed((prev) => prev.filter((t) => t !== tool));
+            append("system", `removed ${tool} from project permissions.`);
+            return;
+          }
+          append(
+            "system",
+            "usage: /permissions [list|allow <tool>|deny <tool>|remove <tool>|reset]",
+          );
           return;
         }
         if (cmd === "help") {
           append(
             "system",
-            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time",
+            "commands\n  /help              show this help\n  /clear             reset the conversation context\n  /sessions          list saved sessions in this workspace\n  /resume <id>       resume a saved session by id\n  /forget <id>       delete a saved session\n  /plan [on|off]     toggle plan mode (read-only + plan approval)\n  /permissions       list/edit project allow/deny lists\n     /permissions allow <tool>     always allow <tool> in this project\n     /permissions deny <tool>      always deny <tool> in this project\n     /permissions remove <tool>    remove <tool> from the lists\n     /permissions reset            clear project permissions\n  /exit              quit axon\n\nshortcuts\n  ↵            send the current message\n  \\↵           insert a newline (backslash + enter)\n  alt+↵ / ctrl+j  also insert a newline\n  shift+↵       newline on terminals that report it\n  ↑ / ↓        move cursor across lines (or browse prompt history at the edges)\n  ctrl+a / ctrl+e  jump to start / end of the current line\n  ctrl+u / ctrl+k  delete to start / end of the current line\n  esc           cancel the running turn\n  ctrl-c        quit at any time",
           );
           return;
         }
@@ -662,6 +853,7 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
       try {
         const result = await runAgent({
           messages: history,
+          planMode: planModeRef.current,
           onToolApprovalRequest,
           signal: controller.signal,
           onEvent: (ev) => {
@@ -764,11 +956,31 @@ export function App({ workspaceRoot, initialSnapshot }: AppProps = {}) {
               <Text color="red">{error}</Text>
             </Box>
           )}
+          {planMode && (
+            <Box marginBottom={1}>
+              <Text color="magenta" bold>
+                ◆ plan mode
+              </Text>
+              <Text dimColor>
+                {"  · read-only · agent will call exit_plan_mode for approval · /plan off"}
+              </Text>
+            </Box>
+          )}
           {alwaysAllowed.length > 0 && (
             <Box marginBottom={1}>
               <Text color="grey" dimColor>
-                always-allowed this session: {alwaysAllowed.join(", ")} ·
-                /clear to reset
+                always-allowed: {alwaysAllowed.join(", ")} ·
+                {permissions.allowed.length > 0
+                  ? ` ${permissions.allowed.length} from project ·`
+                  : ""} /permissions to manage
+              </Text>
+            </Box>
+          )}
+          {permissions.denied.length > 0 && (
+            <Box marginBottom={1}>
+              <Text color="red" dimColor>
+                project-denied: {permissions.denied.join(", ")} ·
+                /permissions remove &lt;tool&gt; to clear
               </Text>
             </Box>
           )}

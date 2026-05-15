@@ -44,6 +44,11 @@ export interface RunAgentOptions {
   summarize?: {
     enabled?: boolean; // default true
   };
+  // When true, the agent runs in read-only "plan mode": all mutating tools
+  // are blocked by the approver and `exit_plan_mode` is exposed so the agent
+  // can present a plan for user approval. The CLI flips this back to false
+  // once the user accepts a plan.
+  planMode?: boolean;
   // Called before every gated tool call. Resolve with the user's decision
   // (allow_once / always_allow / deny). When omitted, all tools run
   // unprompted.
@@ -70,6 +75,7 @@ export async function runAgent(
     maxDepth,
     mcp,
     summarize,
+    planMode,
     onToolApprovalRequest,
     signal,
   } = opts;
@@ -118,13 +124,14 @@ export async function runAgent(
     const projectMemory = await loadProjectMemory(workspaceRoot, log);
     const runState = newRunState(maxCalls, maxDepth);
     const agent = buildAgent({
-      systemPrompt: orchestratorPrompt({ projectMemory }),
+      systemPrompt: orchestratorPrompt({ projectMemory, planMode }),
       log,
       depth: 0,
       state: runState,
       workspaceRoot,
       onFileChange,
       extraTools,
+      planMode,
       approver: onToolApprovalRequest,
       abortSignal: signal,
       // Stream tokens from the orchestrator's model only. Sub-agents build a

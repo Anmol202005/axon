@@ -14,6 +14,11 @@ export { createFileTools, safeJoin } from "./tools/files.js";
 export { createShellTool } from "./tools/shell.js";
 export { createCallAgentTool } from "./tools/delegate.js";
 export {
+  createExitPlanModeTool,
+  EXIT_PLAN_MODE_TOOL_NAME,
+  PLAN_MODE_ALLOWED_TOOLS,
+} from "./tools/plan.js";
+export {
   createSummarizeTool,
   summarizeMessages,
   type SummarizeOptions,
